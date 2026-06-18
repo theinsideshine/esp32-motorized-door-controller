@@ -1,0 +1,32 @@
+# Arduino local libraries vendorizadas dentro de cada sketch
+**/libraries/
+
+# Arduino build outputs
+build/
+build-*/
+*.elf
+*.bin
+*.hex
+*.map
+*.eep
+*.lss
+*.sym
+*.o
+*.d
+*.a
+
+# Temporales / logs
+*.log
+*.tmp
+*.bak
+
+# Windows
+Thumbs.db
+desktop.ini
+
+# VS Code / editores
+.vscode/
+.idea/
+
+# Arduino IDE metadata temporal
+*.autosave
