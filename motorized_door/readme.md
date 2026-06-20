@@ -1,42 +1,41 @@
-# git commit -m "feat: add JSON config and position FSM baseline"
 # ESP32 Motorized Door Controller
 
+Experimental motorized door controller based on an ESP32-S3, DRV8833 motor driver, N20 DC motor, and AS5048A magnetic angle sensor.
 
-Experimental motorized door controller based on an ESP32-S3, a DRV8833 motor driver, an N20 DC motor, and an AS5048A magnetic angle sensor.
+The project is being developed incrementally to validate motor control strategies and firmware architecture for a small motorized positioning system.
 
-The project is being developed incrementally to compare different control strategies and firmware architectures for a small motorized positioning system.
+## Current version
 
-## Current status
+```cpp
+v3.1-continuous-silent-measured-config-json-door-motion-step4
+```
 
-Current validated firmware baseline:
+Baseline before this refactor:
 
 ```cpp
 v3.1-continuous-silent-measured-config-json-position-fsm-step3
 ```
 
-This version validates:
+## Step 4 objective
 
-* JSON-based host communication.
-* Runtime configuration through JSON commands.
-* Persistent configuration using ESP32 NVS.
-* Positioning commands through JSON.
-* Stop/cancel command through JSON.
-* A formal positioning finite state machine.
-* Same physical movement behavior as the previously validated continuous control version.
-* Stable operation with `pwm_move = 75` in the latest test sequence.
-* Configuration persistence after power loss.
+This version performs a conservative architecture refactor.
+
+The positioning/motion state machine was moved out of `motorized_door.ino` into a dedicated motion module, while preserving the validated physical behavior from Step 3.
+
+No control strategy change was intended.
+
+## Files
+
+```text
+motorized_door.ino      Main/device coordinator and validated hardware functions.
+door_config.h/.cpp     JSON host protocol, RAM/NVS configuration and pending requests.
+door_motion.h/.cpp     Automatic positioning/motion state machine.
+readme.md              Project notes.
+```
 
 ## Hardware
 
-Main components:
-
-* ESP32-S3 development board.
-* DRV8833 dual H-bridge motor driver.
-* N20 DC gear motor.
-* AS5048A magnetic angle sensor over SPI.
-* Mechanical end-stop / limit switch.
-
-Validated pinout:
+Validated hardware:
 
 | Function          | ESP32-S3 GPIO |
 | ----------------- | ------------: |
@@ -51,12 +50,12 @@ Validated pinout:
 
 Motor direction convention:
 
-* `LEFT / FORWARD` increases the measured angle.
-* `RIGHT / REWIND` decreases the measured angle.
+```text
+LEFT / FORWARD  -> increases measured angle
+RIGHT / REWIND  -> decreases measured angle
+```
 
-## Validated positions
-
-Current calibrated target positions:
+## Calibrated positions
 
 | Position |   Angle |
 | -------- | ------: |
@@ -64,36 +63,34 @@ Current calibrated target positions:
 | POS_2    | 291.23° |
 | POS_3    | 206.06° |
 
-## Firmware architecture
+## Architecture
 
-The project is intentionally evolving step by step.
-
-Current architecture:
+Current split:
 
 ```text
-Config
+door_config
   - Receives JSON commands from Serial.
-  - Stores configuration in RAM and NVS.
+  - Stores and loads configuration using NVS.
   - Exposes pending requests to the main program.
-  - Does not move the motor.
+  - Does not control the motor.
 
-Main / Device layer
+motorized_door.ino
+  - Coordinates the device.
+  - Owns the validated hardware functions.
   - Reads pending requests from Config.
-  - Starts or cancels positioning.
-  - Coordinates the current device state.
+  - Decides whether to accept go/stop.
+  - Calls DoorMotion.start(), DoorMotion.update() and DoorMotion.cancel().
 
-Position FSM
-  - Handles automatic movement to POS_1, POS_2 or POS_3.
+door_motion
+  - Handles automatic movement to target positions.
+  - Implements the positioning state machine.
   - Calculates angular error.
-  - Selects motor direction.
-  - Detects target reached, stall, timeout, host cancel, and settling.
-  - Produces the movement summary.
-
-Motor output
-  - Applies LEFT, RIGHT or STOP to the DRV8833.
+  - Selects direction.
+  - Detects reached target, crossed target, stall, timeout and host cancellation.
+  - Handles final settling and movement summary.
 ```
 
-Current finite state machines:
+State split:
 
 ```cpp
 enum DeviceState {
@@ -104,15 +101,42 @@ enum DeviceState {
 ```
 
 ```cpp
-enum PositionState {
-  POSITION_IDLE,
-  POSITION_START,
-  POSITION_MOVING,
-  POSITION_SETTLING
+enum DoorMotionState {
+  DOOR_MOTION_IDLE,
+  DOOR_MOTION_START,
+  DOOR_MOTION_MOVING,
+  DOOR_MOTION_SETTLING
 };
 ```
 
-## JSON command examples
+The main sketch remains the product/device coordinator.
+The motion module owns the automatic positioning logic.
+
+## Current control strategy
+
+This version does not include PID yet.
+
+The current positioning strategy is:
+
+```text
+1. Read current angle.
+2. Calculate angular error to target.
+3. Select LEFT or RIGHT direction.
+4. Move with fixed configured PWM.
+5. Stop when target is reached or crossed.
+6. Wait final settle time.
+7. Print summary.
+```
+
+PID will be introduced later inside the motion/positioning layer, not inside host/config logic.
+
+## JSON commands
+
+Read firmware version:
+
+```json
+{"info":"version"}
+```
 
 Read all parameters:
 
@@ -152,36 +176,82 @@ Factory reset configuration:
 {"cmd":"factory-reset"}
 ```
 
-## Notes about the current control strategy
+## Hardware validation
 
-The current control is not PID yet.
+Step 4 was validated in hardware with:
 
-The system uses a simple continuous movement strategy:
+```json
+{"info":"version"}
+```
 
-* Select direction from angular error.
-* Move with configured PWM.
-* Stop when the target is reached or crossed.
-* Wait a final settling time.
-* Report the final position and error.
+```json
+{"info":"all-params"}
+```
 
-The latest tests show that `pwm_move = 70` can be marginal for some starts, while `pwm_move = 75` worked reliably in the validated test sequence.
+```json
+{"pwm_move":75}
+```
 
-The measured final error still shows mechanical overshoot due to inertia. This is expected and will be useful later to justify speed profiling and PID control.
+```json
+{"cmd":"go","pos":2}
+```
 
-## Development roadmap
+```json
+{"cmd":"go","pos":3}
+```
 
-Planned evolution:
+```json
+{"cmd":"go","pos":1}
+```
 
-1. Keep the validated JSON/NVS configuration layer.
-2. Keep refining the positioning finite state machine.
-3. Extract responsibilities into classes only after the behavior is stable.
-4. Add motor and sensor abstractions.
-5. Add speed profiling.
-6. Introduce PID control.
-7. Later, compare the Arduino finite-state-machine approach with an ESP-IDF event-driven architecture.
+```json
+{"cmd":"go","pos":3}
+```
 
-## Repository purpose
+Cancellation test:
 
-This repository is both a working firmware project and a technical learning path.
+```json
+{"cmd":"go","pos":1}
+```
 
-The goal is not only to move a small motorized door, but also to document why the firmware evolves from a simple blocking sketch into a non-blocking architecture based on explicit states, configuration, measured behavior, and eventually PID control.
+while moving:
+
+```json
+{"cmd":"stop"}
+```
+
+Observed result:
+
+```text
+BOOT OK - v3.1-continuous-silent-measured-config-json-door-motion-step4
+
+{"info":"version"}      -> OK
+{"info":"all-params"}   -> OK, includes app_version
+{"pwm_move":75}         -> OK
+
+POS_2 -> reason=posicion_alcanzada, stall_count=0/3
+POS_3 -> reason=posicion_alcanzada, stall_count=0/3
+POS_1 -> reason=posicion_alcanzada, stall_count=0/3
+POS_3 -> reason=posicion_alcanzada, stall_count=0/3
+
+Host stop while moving -> reason=cancelado_por_host, stall_count=0/3
+```
+
+Timing remained stable:
+
+```text
+control_period_us = 5000
+min_sample_dt_us  = 5000
+max_sample_dt_us  ≈ 5003 / 5005
+max_sensor_us     ≈ 32 / 39
+max_control_us    ≈ 40 / 59
+```
+
+## Validation conclusion
+
+The Step 4 refactor preserves the validated Step 3 physical behavior.
+
+The automatic positioning logic is now separated into `door_motion`, while the main sketch remains responsible for product coordination and validated hardware access.
+
+This version is a stable baseline before introducing PID or speed profiling.
+

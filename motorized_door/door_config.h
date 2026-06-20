@@ -75,6 +75,7 @@ public:
   CDoorConfig();
 
   bool init();
+  void set_app_version(const char* version);
 
   /*
     Lee comunicacion por Serial.
@@ -82,6 +83,7 @@ public:
     Protocolo host: SOLO JSON.
 
     Ejemplos:
+      {"info":"version"}
       {"info":"all-params"}
       {"cmd":"go","pos":2}
       {"cmd":"stop"}
@@ -159,6 +161,7 @@ public:
 private:
   Preferences prefs;
 
+  const char* app_version;
   bool nvs_ready;
 
   // Copia RAM persistente
@@ -196,10 +199,12 @@ private:
 
   // JSON responses
   void send_all_params();
+  void send_version();
   void send_ok(JsonDocument& doc);
   void send_ack(JsonDocument& doc);
   void send_error(const char* reason);
   void send_json(JsonDocument& doc);
+  void send_json_pretty(JsonDocument& doc);
 
   // Utilidades
   void discard_serial_line();

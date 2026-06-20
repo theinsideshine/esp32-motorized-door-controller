@@ -3,12 +3,23 @@
 
 CDoorConfig::CDoorConfig()
 {
+  app_version = "unknown";
   nvs_ready = false;
 
   pending_request = DOOR_REQ_NONE;
   requested_position = 0;
 
   load_defaults();
+}
+
+void CDoorConfig::set_app_version(const char* version)
+{
+  if (version == nullptr) {
+    app_version = "unknown";
+    return;
+  }
+
+  app_version = version;
 }
 
 bool CDoorConfig::init()
@@ -606,6 +617,11 @@ void CDoorConfig::process_json(JsonDocument& doc)
       return;
     }
 
+    if (strcmp(key, "version") == 0) {
+      send_version();
+      return;
+    }
+
     send_error("unknown_info");
     return;
   }
@@ -676,6 +692,7 @@ void CDoorConfig::send_all_params()
 
   doc["info"] = "all-params";
   doc["result"] = "ok";
+  doc["app_version"] = app_version;
 
   doc["magic"] = DOOR_CFG_MAGIC_NUMBER;
   doc["schema"] = DOOR_CFG_SCHEMA_VERSION;
@@ -701,6 +718,17 @@ void CDoorConfig::send_all_params()
 
   doc["pending_request"] = (uint8_t)pending_request;
   doc["requested_position"] = requested_position;
+
+  send_json_pretty(doc);
+}
+
+void CDoorConfig::send_version()
+{
+  StaticJsonDocument<256> doc;
+
+  doc["info"] = "version";
+  doc["result"] = "ok";
+  doc["app_version"] = app_version;
 
   send_json(doc);
 }
@@ -732,6 +760,13 @@ void CDoorConfig::send_error(const char* reason)
 void CDoorConfig::send_json(JsonDocument& doc)
 {
   serializeJson(doc, Serial);
+  Serial.println();
+  Serial.println();
+}
+
+void CDoorConfig::send_json_pretty(JsonDocument& doc)
+{
+  serializeJsonPretty(doc, Serial);
   Serial.println();
   Serial.println();
 }
