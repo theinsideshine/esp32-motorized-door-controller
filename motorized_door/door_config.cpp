@@ -702,24 +702,21 @@ void CDoorConfig::send_all_params()
   doc["pending_request"] = (uint8_t)pending_request;
   doc["requested_position"] = requested_position;
 
-  serializeJson(doc, Serial);
-  Serial.println();
+  send_json(doc);
 }
 
 void CDoorConfig::send_ok(JsonDocument& doc)
 {
   doc["result"] = "ok";
 
-  serializeJson(doc, Serial);
-  Serial.println();
+  send_json(doc);
 }
 
 void CDoorConfig::send_ack(JsonDocument& doc)
 {
   doc["result"] = "ack";
 
-  serializeJson(doc, Serial);
-  Serial.println();
+  send_json(doc);
 }
 
 void CDoorConfig::send_error(const char* reason)
@@ -729,7 +726,13 @@ void CDoorConfig::send_error(const char* reason)
   doc["result"] = "error";
   doc["reason"] = reason;
 
+  send_json(doc);
+}
+
+void CDoorConfig::send_json(JsonDocument& doc)
+{
   serializeJson(doc, Serial);
+  Serial.println();
   Serial.println();
 }
 

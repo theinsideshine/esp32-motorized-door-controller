@@ -12,7 +12,7 @@
 /*
   ============================================================
   PROYECTO: ESP32 MOTORIZED DOOR CONTROLLER
-  VERSION: v3.1-continuous-silent-measured-config-json-step2
+  VERSION: v3.1-continuous-silent-measured-config-json-position-fsm-step3
 
   OBJETIVO DE ESTA VERSION
   ------------------------------------------------------------
@@ -61,24 +61,30 @@
     - MOTOR RIGHT / REWIND logico  -> baja angulo
 
   IMPORTANTE:
-    Durante autoMoveActive no se imprime printSensor().
+    Durante POSITION_MOVING no se imprime printSensor().
     Solo imprime:
       - comando recibido
       - inicio de automatico
       - resumen final
       - anomalias
 
-  PASO DE ABSTRACCION 1:
-    Se agrega una maquina de estados superior minima:
-      - SYS_IDLE
-      - SYS_MANUAL_MOVING
-      - SYS_AUTO_MOVING
+  PASO DE ABSTRACCION 2:
+    Se mantiene CDoorConfig validado en step2.
 
-    En este paso se agrega una sola clase nueva: CDoorConfig.
-    CDoorConfig concentra configuracion persistente en NVS, copia RAM
-    y comunicacion host por Serial/JSON.
-    Protocolo host: entrada SOLO JSON, salida JSON desde la clase.
-    El control fisico validado se mantiene igual.
+    En este paso se formaliza la maquina de estados de posicionamiento:
+      - POSITION_IDLE
+      - POSITION_START
+      - POSITION_MOVING
+      - POSITION_SETTLING
+
+    Se diferencia conceptualmente el estado general del dispositivo
+    del estado interno del posicionamiento.
+
+    El control fisico validado se mantiene igual:
+      - mismos comandos JSON
+      - mismos sentidos
+      - mismos criterios de llegada/cruce/stall/timeout
+      - mismo summary final
   ============================================================
 */
 
@@ -86,7 +92,7 @@
 // VERSION
 // ============================================================
 
-#define APP_VERSION "v3.1-continuous-silent-measured-config-json-step2"
+#define APP_VERSION "v3.1-continuous-silent-measured-config-json-position-fsm-step3"
 
 // ============================================================
 // PINES
@@ -168,6 +174,21 @@ CDoorConfig Config;
 // ESTADOS
 // ============================================================
 
+/*
+  Hay dos niveles conceptuales:
+
+  1) DeviceState
+     Estado general del producto/dispositivo.
+     En este paso se usa solo lo necesario para no cambiar comportamiento.
+
+  2) PositionState
+     Estado interno del movimiento automatico hacia una posicion.
+     Esta es la maquina que antes estaba implicita en el flag autoMoveActive.
+
+  MotorState no decide nada: solo refleja la salida fisica aplicada
+  al DRV8833.
+*/
+
 enum MotorState {
   MOTOR_STOPPED,
   MOTOR_RIGHT,
@@ -180,15 +201,23 @@ enum AutoDirection {
   AUTO_DIR_LEFT
 };
 
-enum SystemState {
-  SYS_IDLE,
-  SYS_MANUAL_MOVING,
-  SYS_AUTO_MOVING
+enum DeviceState {
+  DEV_IDLE,
+  DEV_MANUAL_MOVING,
+  DEV_POSITIONING
+};
+
+enum PositionState {
+  POSITION_IDLE,
+  POSITION_START,
+  POSITION_MOVING,
+  POSITION_SETTLING
 };
 
 MotorState motorState = MOTOR_STOPPED;
 AutoDirection autoDirection = AUTO_DIR_NONE;
-SystemState systemState = SYS_IDLE;
+DeviceState deviceState = DEV_IDLE;
+PositionState positionState = POSITION_IDLE;
 
 bool driverEnabled = false;
 bool streamEnabled = false;
@@ -207,11 +236,12 @@ unsigned long lastManualMoveMs = 0;
 // Stream
 unsigned long lastStreamMs = 0;
 
-// Automatico
-bool autoMoveActive = false;
-
+// Automatico / posicionamiento
 float autoTargetDeg = POS_MEDIO_APROX_DEG;
 const char* autoTargetName = "NINGUNA";
+
+float pendingTargetDeg = POS_MEDIO_APROX_DEG;
+const char* pendingTargetName = "NINGUNA";
 
 float autoStartDeg = 0.0f;
 float autoStartErrorDeg = 0.0f;
@@ -222,9 +252,13 @@ float autoDecisionErrorDeg = 0.0f;
 unsigned long autoStartMs = 0;
 unsigned long autoLastStallCheckMs = 0;
 unsigned long autoLastDebugMs = 0;
+unsigned long autoSettleStartMs = 0;
 
 float autoLastStallDeg = 0.0f;
 int autoStallCount = 0;
+
+const char* autoFinishReason = "ninguna";
+bool autoFinishWasCancel = false;
 
 // Medicion de tiempos
 uint32_t autoLastControlUs = 0;
@@ -235,6 +269,10 @@ uint32_t autoMinSampleDtUs = 0xFFFFFFFF;
 uint32_t autoMaxSampleDtUs = 0;
 uint32_t autoMaxSensorUs = 0;
 uint32_t autoMaxControlUs = 0;
+
+bool isPositionActive() {
+  return positionState != POSITION_IDLE;
+}
 
 // ============================================================
 // UTILIDADES ANGULARES
@@ -295,12 +333,25 @@ const char* autoDirectionName() {
   }
 }
 
-const char* systemStateName() {
-  switch (systemState) {
-    case SYS_MANUAL_MOVING:
+const char* deviceStateName() {
+  switch (deviceState) {
+    case DEV_MANUAL_MOVING:
       return "MANUAL_MOVING";
-    case SYS_AUTO_MOVING:
-      return "AUTO_MOVING";
+    case DEV_POSITIONING:
+      return "POSITIONING";
+    default:
+      return "IDLE";
+  }
+}
+
+const char* positionStateName() {
+  switch (positionState) {
+    case POSITION_START:
+      return "START";
+    case POSITION_MOVING:
+      return "MOVING";
+    case POSITION_SETTLING:
+      return "SETTLING";
     default:
       return "IDLE";
   }
@@ -322,7 +373,7 @@ float readSensorDegMeasured(bool countForAutoStats) {
   lastVelRadS = sensor.getVelocity();
   lastRaw = 0;
 
-  if (countForAutoStats && autoMoveActive) {
+  if (countForAutoStats && positionState == POSITION_MOVING) {
     if (sensorUs > autoMaxSensorUs) {
       autoMaxSensorUs = sensorUs;
     }
@@ -361,10 +412,13 @@ void printSensor() {
   Serial.print(Config.get_pwm_move());
 
   Serial.print("  auto=");
-  Serial.print(autoMoveActive ? "ON" : "OFF");
+  Serial.print(isPositionActive() ? "ON" : "OFF");
 
-  Serial.print("  state=");
-  Serial.print(systemStateName());
+  Serial.print("  device=");
+  Serial.print(deviceStateName());
+
+  Serial.print("  position=");
+  Serial.print(positionStateName());
 
   Serial.print("  FC_L=");
   Serial.println(isFcLActive() ? "ACTIVO" : "NORMAL");
@@ -405,7 +459,7 @@ void driverDisable() {
 void stopMotorOnly() {
   motorStopBrake();
   motorState = MOTOR_STOPPED;
-  systemState = SYS_IDLE;
+  deviceState = DEV_IDLE;
   driverDisable();
 }
 
@@ -433,20 +487,20 @@ void motorLeftContinuous() {
 
 void commandRightManual() {
   Serial.println("CMD MOTOR RIGHT MANUAL");
-  systemState = SYS_MANUAL_MOVING;
+  deviceState = DEV_MANUAL_MOVING;
   motorRightContinuous();
   lastManualMoveMs = millis();
 }
 
 void commandLeftManual() {
   Serial.println("CMD MOTOR LEFT MANUAL");
-  systemState = SYS_MANUAL_MOVING;
+  deviceState = DEV_MANUAL_MOVING;
   motorLeftContinuous();
   lastManualMoveMs = millis();
 }
 
 void checkMotorTimeout() {
-  if (autoMoveActive) {
+  if (isPositionActive()) {
     return;
   }
 
@@ -569,54 +623,78 @@ void printAutoSummary(const char* reason, float finalDeg, float finalErrorDeg) {
 }
 
 // ============================================================
-// CONTROL AUTOMATICO CONTINUO
+// CONTROL AUTOMATICO CONTINUO / POSITION FSM
 // ============================================================
 
-void finishAutoMove(const char* reason, float decisionDeg, float decisionErrorDeg) {
+void stopMotorOutputOnly() {
+  motorStopBrake();
+  motorState = MOTOR_STOPPED;
+  driverDisable();
+}
+
+void positionEnterSettling(const char* reason, bool wasCancel, float decisionDeg, float decisionErrorDeg) {
   autoDecisionDeg = decisionDeg;
   autoDecisionErrorDeg = decisionErrorDeg;
 
-  autoMoveActive = false;
+  autoFinishReason = reason;
+  autoFinishWasCancel = wasCancel;
 
-  stopMotorOnly();
+  stopMotorOutputOnly();
 
-  delay(Config.get_auto_final_settle_ms());
-
-  float finalDeg = readSensorDegMeasured(false);
-  float finalError = angleErrorDeg(finalDeg, autoTargetDeg);
-
-  printAutoSummary(reason, finalDeg, finalError);
+  autoSettleStartMs = millis();
+  positionState = POSITION_SETTLING;
 }
 
-void cancelAutoMove(const char* reason, float decisionDeg, float decisionErrorDeg) {
-  autoDecisionDeg = decisionDeg;
-  autoDecisionErrorDeg = decisionErrorDeg;
-
-  autoMoveActive = false;
-
-  stopMotorOnly();
-
-  delay(Config.get_auto_final_settle_ms());
-
-  float finalDeg = readSensorDegMeasured(false);
-  float finalError = angleErrorDeg(finalDeg, autoTargetDeg);
-
-  Serial.print("AUTO CANCELADO: ");
-  Serial.println(reason);
-
-  printAutoSummary(reason, finalDeg, finalError);
+void positionFinishNow(const char* reason, float decisionDeg, float decisionErrorDeg) {
+  positionEnterSettling(reason, false, decisionDeg, decisionErrorDeg);
 }
 
-void startAutoMove(float targetDeg, const char* targetName) {
-  if (autoMoveActive) {
-    Serial.println("AUTO ya esta activo. Use x para cancelar.");
+void positionCancelNow(const char* reason, float decisionDeg, float decisionErrorDeg) {
+  positionEnterSettling(reason, true, decisionDeg, decisionErrorDeg);
+}
+
+void positionCompleteSettlingIfReady() {
+  if (positionState != POSITION_SETTLING) {
     return;
   }
 
+  if (millis() - autoSettleStartMs < Config.get_auto_final_settle_ms()) {
+    return;
+  }
+
+  float finalDeg = readSensorDegMeasured(false);
+  float finalError = angleErrorDeg(finalDeg, autoTargetDeg);
+
+  if (autoFinishWasCancel) {
+    Serial.print("AUTO CANCELADO: ");
+    Serial.println(autoFinishReason);
+  }
+
+  printAutoSummary(autoFinishReason, finalDeg, finalError);
+
+  autoDirection = AUTO_DIR_NONE;
+  positionState = POSITION_IDLE;
+  deviceState = DEV_IDLE;
+}
+
+void startPositionMove(float targetDeg, const char* targetName) {
+  if (isPositionActive()) {
+    Serial.println("POSITION FSM activa. Solo se acepta stop para cancelar.");
+    return;
+  }
+
+  pendingTargetDeg = normalize360(targetDeg);
+  pendingTargetName = targetName;
+
+  deviceState = DEV_POSITIONING;
+  positionState = POSITION_START;
+}
+
+void positionStartStep() {
   readSensorDegMeasured(false);
 
-  autoTargetDeg = normalize360(targetDeg);
-  autoTargetName = targetName;
+  autoTargetDeg = pendingTargetDeg;
+  autoTargetName = pendingTargetName;
 
   autoStartDeg = lastDeg;
   autoStartErrorDeg = angleErrorDeg(autoStartDeg, autoTargetDeg);
@@ -630,6 +708,9 @@ void startAutoMove(float targetDeg, const char* targetName) {
 
   autoLastStallDeg = autoStartDeg;
   autoStallCount = 0;
+
+  autoFinishReason = "ninguna";
+  autoFinishWasCancel = false;
 
   resetAutoStats();
 
@@ -646,16 +727,13 @@ void startAutoMove(float targetDeg, const char* targetName) {
   Serial.println(Config.get_pwm_move());
 
   if (fabs(autoStartErrorDeg) <= Config.get_auto_tolerance_deg()) {
-    autoMoveActive = false;
     autoDirection = AUTO_DIR_NONE;
-    systemState = SYS_IDLE;
+    positionState = POSITION_IDLE;
+    deviceState = DEV_IDLE;
 
     printAutoSummary("ya_en_posicion", autoStartDeg, autoStartErrorDeg);
     return;
   }
-
-  autoMoveActive = true;
-  systemState = SYS_AUTO_MOVING;
 
   if (autoStartErrorDeg > 0.0f) {
     // current > target: bajar angulo
@@ -671,13 +749,10 @@ void startAutoMove(float targetDeg, const char* targetName) {
 
   // Forzamos que el primer control se ejecute enseguida.
   autoLastControlUs = micros() - Config.get_control_period_us();
+  positionState = POSITION_MOVING;
 }
 
-void updateAutoMove() {
-  if (!autoMoveActive) {
-    return;
-  }
-
+void positionMovingStep() {
   uint32_t nowUs = micros();
 
   if ((uint32_t)(nowUs - autoLastControlUs) < Config.get_control_period_us()) {
@@ -698,31 +773,31 @@ void updateAutoMove() {
   autoDecisionErrorDeg = errorDeg;
 
   if (isFcLActive()) {
-    cancelAutoMove("FC_L_ACTIVO", currentDeg, errorDeg);
+    positionCancelNow("FC_L_ACTIVO", currentDeg, errorDeg);
     return;
   }
 
   if (millis() - autoStartMs >= Config.get_auto_max_run_ms()) {
-    cancelAutoMove("tiempo_maximo_alcanzado", currentDeg, errorDeg);
+    positionCancelNow("tiempo_maximo_alcanzado", currentDeg, errorDeg);
     return;
   }
 
   // Caso ideal: entro dentro de tolerancia.
   if (absErrorDeg <= Config.get_auto_tolerance_deg()) {
-    finishAutoMove("posicion_alcanzada", currentDeg, errorDeg);
+    positionFinishNow("posicion_alcanzada", currentDeg, errorDeg);
     return;
   }
 
   // Si cruce el objetivo, corto.
   // RIGHT baja angulo: el error deberia pasar de positivo a negativo.
   if (autoDirection == AUTO_DIR_RIGHT && errorDeg < -Config.get_auto_cross_margin_deg()) {
-    finishAutoMove("objetivo_cruzado", currentDeg, errorDeg);
+    positionFinishNow("objetivo_cruzado", currentDeg, errorDeg);
     return;
   }
 
   // LEFT sube angulo: el error deberia pasar de negativo a positivo.
   if (autoDirection == AUTO_DIR_LEFT && errorDeg > Config.get_auto_cross_margin_deg()) {
-    finishAutoMove("objetivo_cruzado", currentDeg, errorDeg);
+    positionFinishNow("objetivo_cruzado", currentDeg, errorDeg);
     return;
   }
 
@@ -740,7 +815,7 @@ void updateAutoMove() {
     autoLastStallCheckMs = millis();
 
     if (autoStallCount >= Config.get_auto_stall_max_count()) {
-      cancelAutoMove("sin_movimiento_detectado", currentDeg, errorDeg);
+      positionCancelNow("sin_movimiento_detectado", currentDeg, errorDeg);
       return;
     }
   }
@@ -772,6 +847,26 @@ void updateAutoMove() {
   }
 }
 
+void updatePositionFsm() {
+  switch (positionState) {
+    case POSITION_START:
+      positionStartStep();
+      break;
+
+    case POSITION_MOVING:
+      positionMovingStep();
+      break;
+
+    case POSITION_SETTLING:
+      positionCompleteSettlingIfReady();
+      break;
+
+    case POSITION_IDLE:
+    default:
+      break;
+  }
+}
+
 // ============================================================
 // COMANDOS SERIAL
 // ============================================================
@@ -784,8 +879,11 @@ void printVersion() {
   Serial.print("PWM actual=");
   Serial.println(Config.get_pwm_move());
 
-  Serial.print("systemState=");
-  Serial.println(systemStateName());
+  Serial.print("deviceState=");
+  Serial.println(deviceStateName());
+
+  Serial.print("positionState=");
+  Serial.println(positionStateName());
 
   Serial.print("CONTROL_PERIOD_US=");
   Serial.println(Config.get_control_period_us());
@@ -863,31 +961,34 @@ void processHostRequest() {
   DoorHostRequest req = Config.get_request();
   Config.clear_request();
 
-  if (autoMoveActive && req != DOOR_REQ_STOP) {
+  if (isPositionActive() && req != DOOR_REQ_STOP) {
     Serial.println("AUTO activo: solo se acepta stop para cancelar.");
     return;
   }
 
   switch (req) {
     case DOOR_REQ_STOP:
-      if (autoMoveActive) {
+      if (positionState == POSITION_MOVING || positionState == POSITION_START) {
         readSensorDegMeasured(false);
-        cancelAutoMove("cancelado_por_host", lastDeg, angleErrorDeg(lastDeg, autoTargetDeg));
+        positionCancelNow("cancelado_por_host", lastDeg, angleErrorDeg(lastDeg, autoTargetDeg));
+      } else if (positionState == POSITION_SETTLING) {
+        // Ya se corto el motor y se esta esperando la lectura final estable.
+        // No se cambia el reason original.
       } else {
         stopMotorOnly();
       }
       break;
 
     case DOOR_REQ_GO_POS_1:
-      startAutoMove(Config.get_pos_deg(1), "POS_1");
+      startPositionMove(Config.get_pos_deg(1), "POS_1");
       break;
 
     case DOOR_REQ_GO_POS_2:
-      startAutoMove(Config.get_pos_deg(2), "POS_2");
+      startPositionMove(Config.get_pos_deg(2), "POS_2");
       break;
 
     case DOOR_REQ_GO_POS_3:
-      startAutoMove(Config.get_pos_deg(3), "POS_3");
+      startPositionMove(Config.get_pos_deg(3), "POS_3");
       break;
 
     default:
@@ -913,7 +1014,7 @@ void setup() {
 
   digitalWrite(STBY_PIN, LOW);
   driverEnabled = false;
-  systemState = SYS_IDLE;
+  deviceState = DEV_IDLE;
 
   ledcAttach(AIN1_PIN, PWM_FREQ, PWM_RES);
   ledcAttach(AIN2_PIN, PWM_FREQ, PWM_RES);
@@ -940,8 +1041,8 @@ void loop() {
   Config.host_cmd();
   processHostRequest();
 
-  if (autoMoveActive) {
-    updateAutoMove();
+  if (isPositionActive()) {
+    updatePositionFsm();
     return;
   }
 

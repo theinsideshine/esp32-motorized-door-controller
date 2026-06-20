@@ -199,6 +199,7 @@ private:
   void send_ok(JsonDocument& doc);
   void send_ack(JsonDocument& doc);
   void send_error(const char* reason);
+  void send_json(JsonDocument& doc);
 
   // Utilidades
   void discard_serial_line();
