@@ -7,25 +7,22 @@
 #include <SimpleFOC.h>
 #include <SimpleFOCDrivers.h>
 #include "encoders/as5048a/MagneticSensorAS5048A.h"
-
 #include "door_config.h"
 #include "door_motion.h"
 #include "door_motor.h"
-#include "door_angle_sensor.h"
 
 /*
   ============================================================
   PROYECTO: ESP32 MOTORIZED DOOR CONTROLLER
-  VERSION: v3.1-continuous-silent-measured-config-json-door-motion-motor-sensor-step6a
+  VERSION: v3.1-continuous-silent-measured-config-json-door-motion-motor-step5
 
   OBJETIVO DE ESTA VERSION
   ------------------------------------------------------------
-  Refactor conservador de la version step5 validada.
+  Refactor conservador de la version step4 validada.
 
   Se mantiene CDoorMotion como modulo de movimiento/posicionamiento
-  automatico, CDoorMotor como salida fisica DRV8833/PWM y se
-  extrae la lectura AS5048A a CDoorAngleSensor, manteniendo el main
-  como coordinador del producto/dispositivo.
+  automatico y se extrae la salida fisica DRV8833 a CDoorMotor,
+  manteniendo el main como coordinador del producto/dispositivo.
 
   No cambia el comportamiento fisico validado:
     - mismos pines
@@ -55,11 +52,6 @@
       - STBY / AIN1 / AIN2
       - PWM / LEFT / RIGHT / STOP
 
-    door_angle_sensor:
-      - entrada fisica AS5048A por SPI
-      - lectura angular rad/deg
-      - velocidad y tiempo sensor_us
-
     PID:
       - todavia NO implementado.
       - cuando entre, pertenece al bloque de movimiento/posicionamiento.
@@ -70,7 +62,7 @@
 // VERSION
 // ============================================================
 
-#define APP_VERSION "v3.1-continuous-silent-measured-config-json-door-motion-motor-sensor-step6a"
+#define APP_VERSION "v3.1-continuous-silent-measured-config-json-door-motion-motor-step5"
 
 // ============================================================
 // PINES
@@ -126,18 +118,17 @@ MagneticSensorAS5048A sensor(AS5048_CS);
 CDoorConfig Config;
 CDoorMotion DoorMotion;
 CDoorMotor DoorMotor;
-CDoorAngleSensor DoorSensor(sensor);
 
 // ============================================================
-// ESTADO DEL PRODUCTO
+// ESTADOS DEL PRODUCTO / SALIDA FISICA
 // ============================================================
 
 /*
   DeviceState representa el estado general del producto.
   DoorMotion tiene su propia maquina interna de posicionamiento.
-  DoorMotor solo refleja/ejecuta la salida fisica aplicada al DRV8833.
-  DoorSensor encapsula la lectura fisica AS5048A.
+  DoorMotor refleja/ejecuta la salida fisica aplicada al DRV8833.
 */
+
 
 enum DeviceState {
   DEV_IDLE,
@@ -146,8 +137,14 @@ enum DeviceState {
 };
 
 DeviceState deviceState = DEV_IDLE;
-
 bool streamEnabled = false;
+
+// Ultima lectura del sensor
+float lastDeg = 0.0f;
+float lastRad = 0.0f;
+float lastVelRadS = 0.0f;
+uint16_t lastRaw = 0;
+uint32_t lastSensorReadUs = 0;
 
 // Manual
 unsigned long lastManualMoveMs = 0;
@@ -195,11 +192,22 @@ const char* deviceStateName() {
 float readSensorDegMeasured(bool countForMotionStats) {
   (void)countForMotionStats;
 
-  return DoorSensor.read_deg();
+  uint32_t t0 = micros();
+
+  sensor.update();
+
+  lastSensorReadUs = micros() - t0;
+
+  lastRad = sensor.getAngle();
+  lastDeg = normalize360(lastRad * 57.2957795f);
+  lastVelRadS = sensor.getVelocity();
+  lastRaw = 0;
+
+  return lastDeg;
 }
 
 uint32_t getLastSensorReadUs() {
-  return DoorSensor.last_read_us();
+  return lastSensorReadUs;
 }
 
 bool isFcLActive() {
@@ -208,22 +216,22 @@ bool isFcLActive() {
 
 void printSensor() {
   Serial.print("raw=");
-  Serial.print(DoorSensor.raw());
+  Serial.print(lastRaw);
 
   Serial.print("  deg=");
-  Serial.print(DoorSensor.deg(), 2);
+  Serial.print(lastDeg, 2);
 
   Serial.print("  mid=");
   Serial.print(POS_MEDIO_APROX_DEG, 2);
 
   Serial.print("  delta_mid=");
-  Serial.print(angleErrorDeg(DoorSensor.deg(), POS_MEDIO_APROX_DEG), 2);
+  Serial.print(angleErrorDeg(lastDeg, POS_MEDIO_APROX_DEG), 2);
 
   Serial.print("  rad=");
-  Serial.print(DoorSensor.rad(), 5);
+  Serial.print(lastRad, 5);
 
   Serial.print("  vel_rad_s=");
-  Serial.print(DoorSensor.vel_rad_s(), 5);
+  Serial.print(lastVelRadS, 5);
 
   Serial.print("  motor=");
   Serial.print(DoorMotor.state_name());
@@ -296,7 +304,6 @@ void checkMotorTimeout() {
     printSensor();
   }
 }
-
 // ============================================================
 // COMANDOS / INFO LOCAL
 // ============================================================
@@ -454,9 +461,9 @@ void setup() {
   pinMode(FC_L_PIN, INPUT_PULLUP);
 
   DoorMotor.begin(STBY_PIN, AIN1_PIN, AIN2_PIN, PWM_FREQ, PWM_RES);
+
   deviceState = DEV_IDLE;
 
-  // Mantener inicializacion AS5048A exactamente igual a Step 5 validado.
   SPI.begin(AS5048_SCK, AS5048_MISO, AS5048_MOSI, AS5048_CS);
   sensor.init(&SPI);
 

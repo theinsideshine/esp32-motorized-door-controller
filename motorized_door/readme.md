@@ -2,41 +2,71 @@
 
 Experimental motorized door controller based on an ESP32-S3, DRV8833 motor driver, N20 DC motor, and AS5048A magnetic angle sensor.
 
-The project is being developed incrementally to validate motor control strategies and firmware architecture for a small motorized positioning system.
-
 ## Current version
+
+```cpp
+v3.1-continuous-silent-measured-config-json-door-motion-motor-sensor-step6a
+```
+
+## Baseline
+
+Previous validated version:
 
 ```cpp
 v3.1-continuous-silent-measured-config-json-door-motion-motor-step5
 ```
 
-Baseline before this refactor:
+Step 5 validated that extracting the DRV8833/PWM output to `CDoorMotor` did not change the physical behavior.
 
-```cpp
-v3.1-continuous-silent-measured-config-json-door-motion-step4
-```
+## Step 6 objective
 
-## Step 5 objective
-
-This version performs a conservative hardware-output refactor.
-
-The DRV8833 motor output code was moved out of `motorized_door.ino` into a dedicated `CDoorMotor` class, while preserving the validated Step 4 behavior.
+This version performs another conservative refactor: the AS5048A SPI angle sensor code was moved out of `motorized_door.ino` into a dedicated sensor module.
 
 No control strategy change was intended.
 
 ## Files
 
 ```text
-motorized_door.ino      Main/device coordinator, AS5048A read and host request routing.
-door_config.h/.cpp     JSON host protocol, RAM/NVS configuration and pending requests.
-door_motion.h/.cpp     Automatic positioning/motion state machine.
-door_motor.h/.cpp      DRV8833 output, PWM, STBY and motor state.
-readme.md              Project notes.
+motorized_door.ino        Main/device coordinator.
+door_config.h/.cpp       JSON host protocol, RAM/NVS configuration and pending requests.
+door_motion.h/.cpp       Automatic positioning/motion state machine.
+door_motor.h/.cpp        DRV8833/PWM motor output.
+door_angle_sensor.h/.cpp AS5048A SPI angle sensor input.
+readme.md                Project notes.
 ```
 
-## Hardware
+## Architecture
 
-Validated hardware:
+```text
+main / product coordinator
+  - setup / loop
+  - JSON request coordination
+  - DeviceState
+  - connects Config, Motion, Motor and Sensor
+
+door_config
+  - JSON
+  - NVS
+  - persisted parameters
+
+door_motion
+  - automatic positioning state machine
+  - target, direction, arrival, crossing, stall, timeout, cancel, summary
+
+door_motor
+  - DRV8833 output
+  - STBY, AIN1, AIN2, PWM
+  - LEFT, RIGHT, STOP
+
+door_angle_sensor
+  - AS5048A SPI initialization
+  - sensor.update()
+  - angle rad/deg
+  - velocity
+  - sensor_us timing
+```
+
+## Hardware pins
 
 | Function          | ESP32-S3 GPIO |
 | ----------------- | ------------: |
@@ -49,14 +79,7 @@ Validated hardware:
 | AS5048A MISO      |        GPIO13 |
 | FC_L limit switch |        GPIO14 |
 
-Motor direction convention:
-
-```text
-LEFT / FORWARD  -> increases measured angle
-RIGHT / REWIND  -> decreases measured angle
-```
-
-## Calibrated positions
+## Validated positions
 
 | Position |   Angle |
 | -------- | ------: |
@@ -64,137 +87,14 @@ RIGHT / REWIND  -> decreases measured angle
 | POS_2    | 291.23° |
 | POS_3    | 206.06° |
 
-## Architecture
-
-Current split:
+## Motor direction convention
 
 ```text
-door_config
-  - Receives JSON commands from Serial.
-  - Stores and loads configuration using NVS.
-  - Exposes pending requests to the main program.
-  - Does not control the motor.
-
-motorized_door.ino
-  - Coordinates the device.
-  - Owns the AS5048A sensor read for now.
-  - Reads pending requests from Config.
-  - Decides whether to accept go/stop.
-  - Calls DoorMotion.start(), DoorMotion.update() and DoorMotion.cancel().
-  - Connects DoorMotion with DoorMotor through simple wrapper callbacks.
-
-door_motion
-  - Handles automatic movement to target positions.
-  - Implements the positioning state machine.
-  - Calculates angular error.
-  - Selects direction.
-  - Detects reached target, crossed target, stall, timeout and host cancellation.
-  - Handles final settling and movement summary.
-
-door_motor
-  - Encapsulates DRV8833 output.
-  - Owns STBY, AIN1 and AIN2.
-  - Applies PWM to LEFT or RIGHT.
-  - Executes brake/coast stop behavior.
-  - Tracks current physical motor output state.
+LEFT / FORWARD  -> increases measured angle
+RIGHT / REWIND  -> decreases measured angle
 ```
 
-State split:
-
-```cpp
-enum DeviceState {
-  DEV_IDLE,
-  DEV_MANUAL_MOVING,
-  DEV_POSITIONING
-};
-```
-
-```cpp
-enum DoorMotionState {
-  DOOR_MOTION_IDLE,
-  DOOR_MOTION_START,
-  DOOR_MOTION_MOVING,
-  DOOR_MOTION_SETTLING
-};
-```
-
-```cpp
-enum DoorMotorState {
-  DOOR_MOTOR_STOPPED,
-  DOOR_MOTOR_RIGHT,
-  DOOR_MOTOR_LEFT
-};
-```
-
-The main sketch remains the product/device coordinator.  
-The motion module owns automatic positioning logic.  
-The motor module owns only the physical DRV8833 output.
-
-## Current control strategy
-
-This version does not include PID yet.
-
-The current positioning strategy is:
-
-```text
-1. Read current angle.
-2. Calculate angular error to target.
-3. Select LEFT or RIGHT direction.
-4. Move with fixed configured PWM.
-5. Stop when target is reached or crossed.
-6. Wait final settle time.
-7. Print summary.
-```
-
-PID will be introduced later inside the motion/positioning layer, not inside host/config or motor output logic.
-
-## JSON commands
-
-Read firmware version:
-
-```json
-{"info":"version"}
-```
-
-Read all parameters:
-
-```json
-{"info":"all-params"}
-```
-
-Set movement PWM:
-
-```json
-{"pwm_move":75}
-```
-
-Move to a position:
-
-```json
-{"cmd":"go","pos":1}
-```
-
-```json
-{"cmd":"go","pos":2}
-```
-
-```json
-{"cmd":"go","pos":3}
-```
-
-Stop current movement:
-
-```json
-{"cmd":"stop"}
-```
-
-Factory reset configuration:
-
-```json
-{"cmd":"factory-reset"}
-```
-
-## Mandatory validation sequence
+## JSON validation sequence
 
 ```json
 {"info":"version"}
@@ -224,7 +124,7 @@ Factory reset configuration:
 {"cmd":"go","pos":3}
 ```
 
-Cancellation test:
+Cancellation:
 
 ```json
 {"cmd":"go","pos":1}
@@ -239,16 +139,20 @@ while moving:
 Expected result:
 
 ```text
-Normal movements -> reason=posicion_alcanzada
-Host cancellation -> reason=cancelado_por_host
-stall_count=0/3 under the same hardware conditions validated in Step 4
-control_period_us=5000 preserved
-max_sensor_us and max_control_us comparable to Step 4
+normal movement -> reason=posicion_alcanzada
+host stop       -> reason=cancelado_por_host
+stall_count     -> 0/3 under normal conditions with pwm_move=75
+control_period_us remains 5000
+sensor_us and control_us remain close to Step 5
 ```
 
-## Validation rule
+## Notes
 
-This refactor is acceptable only if the hardware behavior remains equivalent to Step 4.
+PID is still not implemented. The current control strategy remains fixed PWM positioning.
 
-If timing, direction, PWM, stop behavior, stall detection or final summary changes without a clear reason, the refactor must be rejected.
+PID should later be introduced inside the motion/positioning layer, not inside host/config or the main product coordinator.
 
+
+## Step 6a note
+
+Step 6 original movia tambien la construccion/inicializacion del AS5048A y en hardware la lectura quedo clavada en 0.00. Step 6a mantiene SPI.begin() y sensor.init(&SPI) exactamente como Step 5 validado, y solo encapsula lectura/estado en CDoorAngleSensor.
