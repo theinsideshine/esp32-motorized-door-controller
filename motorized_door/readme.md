@@ -5,7 +5,7 @@ Experimental motorized door controller based on an ESP32-S3, DRV8833 motor drive
 ## Current version
 
 ```cpp
-v3.1-continuous-silent-measured-config-json-door-motion-motor-sensor-step6a
+v3.1-continuous-silent-measured-config-json-door-motion-motor-sensor-log-step7
 ```
 
 ## Baseline
@@ -156,3 +156,42 @@ PID should later be introduced inside the motion/positioning layer, not inside h
 ## Step 6a note
 
 Step 6 original movia tambien la construccion/inicializacion del AS5048A y en hardware la lectura quedo clavada en 0.00. Step 6a mantiene SPI.begin() y sensor.init(&SPI) exactamente como Step 5 validado, y solo encapsula lectura/estado en CDoorAngleSensor.
+
+
+## Step 7 objective
+
+This version adds a small logging layer for human/debug messages.
+
+The host JSON protocol is not changed. JSON command responses, parameter replies and protocol errors remain handled directly by `door_config` through `Serial`.
+
+`Log.msg(...)` is used only for human-readable messages from the main sketch, such as boot details, diagnostic sensor line, manual movement messages and non-protocol warnings.
+
+`Log` is controlled by the persisted `log_level` parameter:
+
+```text
+0 = LOG_DISABLED
+1 = LOG_MSG
+2 = LOG_CTRL_JSON
+3 = LOG_CTRL_ARDUINO_PLOTTER
+```
+
+For this firmware, `Serial.begin()` remains owned by `motorized_door.ino`. The log class does not initialize Serial.
+
+Current Step 7 scope:
+
+```text
+changed:
+  - add log.h / log.cpp
+  - add global Clog Log
+  - sync Log level from Config.get_log_level()
+  - route main-sketch human messages through Log.msg()
+  - remove unused local printVersion / printPositions / printHelp helpers from the .ino
+
+not changed:
+  - JSON host protocol
+  - door_config communication
+  - door_motion behavior
+  - door_motor behavior
+  - door_angle_sensor behavior
+  - control timing / PWM / stall / timeout / target criteria
+```

@@ -12,11 +12,12 @@
 #include "door_motion.h"
 #include "door_motor.h"
 #include "door_angle_sensor.h"
+#include "log.h"
 
 /*
   ============================================================
   PROYECTO: ESP32 MOTORIZED DOOR CONTROLLER
-  VERSION: v3.1-continuous-silent-measured-config-json-door-motion-motor-sensor-step6a
+  VERSION: v3.1-continuous-silent-measured-config-json-door-motion-motor-sensor-log-step7
 
   OBJETIVO DE ESTA VERSION
   ------------------------------------------------------------
@@ -70,7 +71,7 @@
 // VERSION
 // ============================================================
 
-#define APP_VERSION "v3.1-continuous-silent-measured-config-json-door-motion-motor-sensor-step6a"
+#define APP_VERSION "v3.1-continuous-silent-measured-config-json-door-motion-motor-sensor-log-step7"
 
 // ============================================================
 // PINES
@@ -127,6 +128,7 @@ CDoorConfig Config;
 CDoorMotion DoorMotion;
 CDoorMotor DoorMotor;
 CDoorAngleSensor DoorSensor(sensor);
+Clog Log;
 
 // ============================================================
 // ESTADO DEL PRODUCTO
@@ -206,42 +208,26 @@ bool isFcLActive() {
   return digitalRead(FC_L_PIN) == HIGH;
 }
 
+void syncLogLevel() {
+  Log.set_level((uint8_t)Config.get_log_level());
+}
+
 void printSensor() {
-  Serial.print("raw=");
-  Serial.print(DoorSensor.raw());
-
-  Serial.print("  deg=");
-  Serial.print(DoorSensor.deg(), 2);
-
-  Serial.print("  mid=");
-  Serial.print(POS_MEDIO_APROX_DEG, 2);
-
-  Serial.print("  delta_mid=");
-  Serial.print(angleErrorDeg(DoorSensor.deg(), POS_MEDIO_APROX_DEG), 2);
-
-  Serial.print("  rad=");
-  Serial.print(DoorSensor.rad(), 5);
-
-  Serial.print("  vel_rad_s=");
-  Serial.print(DoorSensor.vel_rad_s(), 5);
-
-  Serial.print("  motor=");
-  Serial.print(DoorMotor.state_name());
-
-  Serial.print("  pwm=");
-  Serial.print(Config.get_pwm_move());
-
-  Serial.print("  auto=");
-  Serial.print(isPositionActive() ? "ON" : "OFF");
-
-  Serial.print("  device=");
-  Serial.print(deviceStateName());
-
-  Serial.print("  position=");
-  Serial.print(DoorMotion.state_name());
-
-  Serial.print("  FC_L=");
-  Serial.println(isFcLActive() ? "ACTIVO" : "NORMAL");
+  Log.msg(
+    F("raw=%u deg=%.2f mid=%.2f delta_mid=%.2f rad=%.5f vel_rad_s=%.5f motor=%s pwm=%lu auto=%s device=%s position=%s FC_L=%s"),
+    DoorSensor.raw(),
+    DoorSensor.deg(),
+    POS_MEDIO_APROX_DEG,
+    angleErrorDeg(DoorSensor.deg(), POS_MEDIO_APROX_DEG),
+    DoorSensor.rad(),
+    DoorSensor.vel_rad_s(),
+    DoorMotor.state_name(),
+    (unsigned long)Config.get_pwm_move(),
+    isPositionActive() ? "ON" : "OFF",
+    deviceStateName(),
+    DoorMotion.state_name(),
+    isFcLActive() ? "ACTIVO" : "NORMAL"
+  );
 }
 
 // ============================================================
@@ -266,14 +252,14 @@ void motorLeftContinuous() {
 }
 
 void commandRightManual() {
-  Serial.println("CMD MOTOR RIGHT MANUAL");
+  Log.msg(F("CMD MOTOR RIGHT MANUAL"));
   deviceState = DEV_MANUAL_MOVING;
   motorRightContinuous();
   lastManualMoveMs = millis();
 }
 
 void commandLeftManual() {
-  Serial.println("CMD MOTOR LEFT MANUAL");
+  Log.msg(F("CMD MOTOR LEFT MANUAL"));
   deviceState = DEV_MANUAL_MOVING;
   motorLeftContinuous();
   lastManualMoveMs = millis();
@@ -289,99 +275,12 @@ void checkMotorTimeout() {
   }
 
   if (millis() - lastManualMoveMs >= TIMEOUT_MANUAL_MS) {
-    Serial.println("AUTO STOP por timeout manual");
+    Log.msg(F("AUTO STOP por timeout manual"));
     stopMotorOnly();
 
     readSensorDegMeasured(false);
     printSensor();
   }
-}
-
-// ============================================================
-// COMANDOS / INFO LOCAL
-// ============================================================
-
-void printVersion() {
-  Serial.println();
-  Serial.print("APP_VERSION=");
-  Serial.println(APP_VERSION);
-
-  Serial.print("PWM actual=");
-  Serial.println(Config.get_pwm_move());
-
-  Serial.print("deviceState=");
-  Serial.println(deviceStateName());
-
-  Serial.print("positionState=");
-  Serial.println(DoorMotion.state_name());
-
-  Serial.print("CONTROL_PERIOD_US=");
-  Serial.println(Config.get_control_period_us());
-
-  Serial.print("AUTO_TOLERANCE_DEG=");
-  Serial.println(Config.get_auto_tolerance_deg(), 2);
-
-  Serial.print("AUTO_MAX_RUN_MS=");
-  Serial.println(Config.get_auto_max_run_ms());
-
-  Serial.print("AUTO_STALL_CHECK_MS=");
-  Serial.println(Config.get_auto_stall_check_ms());
-
-  Serial.print("AUTO_MIN_MOVE_DEG=");
-  Serial.println(Config.get_auto_min_move_deg(), 2);
-
-  Serial.print("AUTO_STALL_MAX_COUNT=");
-  Serial.println(Config.get_auto_stall_max_count());
-
-  Serial.print("stream=");
-  Serial.println(streamEnabled ? "ON" : "OFF");
-
-  Serial.print("debugAuto=");
-  Serial.println(DoorMotion.get_debug() ? "ON" : "OFF");
-
-  Serial.println();
-}
-
-void printPositions() {
-  Serial.println();
-  Serial.println("POSICIONES ACTUALES EN RAM:");
-
-  Serial.print("POS_1=");
-  Serial.print(Config.get_pos1_deg(), 2);
-  Serial.print(" deg  hardcoded=");
-  Serial.println(POS_1_DEFAULT_DEG, 2);
-
-  Serial.print("POS_2=");
-  Serial.print(Config.get_pos2_deg(), 2);
-  Serial.print(" deg  hardcoded=");
-  Serial.println(POS_2_DEFAULT_DEG, 2);
-
-  Serial.print("POS_3=");
-  Serial.print(Config.get_pos3_deg(), 2);
-  Serial.print(" deg  hardcoded=");
-  Serial.println(POS_3_DEFAULT_DEG, 2);
-
-  Serial.println();
-}
-
-void printHelp() {
-  Serial.println();
-  Serial.println("============================================================");
-  Serial.println(APP_VERSION);
-  Serial.println("HOST JSON ONLY:");
-  Serial.println("  {\"info\":\"version\"}");
-  Serial.println("  {\"info\":\"all-params\"}");
-  Serial.println("  {\"cmd\":\"go\",\"pos\":1}");
-  Serial.println("  {\"cmd\":\"go\",\"pos\":2}");
-  Serial.println("  {\"cmd\":\"go\",\"pos\":3}");
-  Serial.println("  {\"cmd\":\"stop\"}");
-  Serial.println("  {\"pwm_move\":70}");
-  Serial.println("  {\"pos1_deg\":2.29}");
-  Serial.println("  {\"pos2_deg\":291.23}");
-  Serial.println("  {\"pos3_deg\":206.06}");
-  Serial.println("  {\"cmd\":\"factory-reset\"}");
-  Serial.println("============================================================");
-  Serial.println();
 }
 
 // ============================================================
@@ -403,7 +302,7 @@ void processHostRequest() {
   Config.clear_request();
 
   if (isPositionActive() && req != DOOR_REQ_STOP) {
-    Serial.println("AUTO activo: solo se acepta stop para cancelar.");
+    Log.msg(F("AUTO activo: solo se acepta stop para cancelar."));
     return;
   }
 
@@ -451,6 +350,8 @@ void setup() {
     Serial.println("ERROR: no se pudo inicializar Config/NVS. Se usan defaults RAM.");
   }
 
+  syncLogLevel();
+
   pinMode(FC_L_PIN, INPUT_PULLUP);
 
   DoorMotor.begin(STBY_PIN, AIN1_PIN, AIN2_PIN, PWM_FREQ, PWM_RES);
@@ -472,18 +373,19 @@ void setup() {
   Serial.println();
   Serial.print("BOOT OK - ");
   Serial.println(APP_VERSION);
-  Serial.println("Host: JSON only. Ejemplo: {\"info\":\"all-params\"}");
+  Log.msg(F("Host: JSON only. Ejemplo: {\"info\":\"all-params\"}"));
 
   delay(200);
 
   readSensorDegMeasured(false);
   printSensor();
 
-  Serial.println("Sistema listo. Stream apagado por defecto.");
+  Log.msg(F("Sistema listo. Stream apagado por defecto."));
 }
 
 void loop() {
   Config.host_cmd();
+  syncLogLevel();
   processHostRequest();
 
   if (DoorMotion.is_active()) {
