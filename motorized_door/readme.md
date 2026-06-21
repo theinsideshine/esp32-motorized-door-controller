@@ -7,29 +7,30 @@ The project is being developed incrementally to validate motor control strategie
 ## Current version
 
 ```cpp
-v3.1-continuous-silent-measured-config-json-door-motion-step4
+v3.1-continuous-silent-measured-config-json-door-motion-motor-step5
 ```
 
 Baseline before this refactor:
 
 ```cpp
-v3.1-continuous-silent-measured-config-json-position-fsm-step3
+v3.1-continuous-silent-measured-config-json-door-motion-step4
 ```
 
-## Step 4 objective
+## Step 5 objective
 
-This version performs a conservative architecture refactor.
+This version performs a conservative hardware-output refactor.
 
-The positioning/motion state machine was moved out of `motorized_door.ino` into a dedicated motion module, while preserving the validated physical behavior from Step 3.
+The DRV8833 motor output code was moved out of `motorized_door.ino` into a dedicated `CDoorMotor` class, while preserving the validated Step 4 behavior.
 
 No control strategy change was intended.
 
 ## Files
 
 ```text
-motorized_door.ino      Main/device coordinator and validated hardware functions.
+motorized_door.ino      Main/device coordinator, AS5048A read and host request routing.
 door_config.h/.cpp     JSON host protocol, RAM/NVS configuration and pending requests.
 door_motion.h/.cpp     Automatic positioning/motion state machine.
+door_motor.h/.cpp      DRV8833 output, PWM, STBY and motor state.
 readme.md              Project notes.
 ```
 
@@ -76,10 +77,11 @@ door_config
 
 motorized_door.ino
   - Coordinates the device.
-  - Owns the validated hardware functions.
+  - Owns the AS5048A sensor read for now.
   - Reads pending requests from Config.
   - Decides whether to accept go/stop.
   - Calls DoorMotion.start(), DoorMotion.update() and DoorMotion.cancel().
+  - Connects DoorMotion with DoorMotor through simple wrapper callbacks.
 
 door_motion
   - Handles automatic movement to target positions.
@@ -88,6 +90,13 @@ door_motion
   - Selects direction.
   - Detects reached target, crossed target, stall, timeout and host cancellation.
   - Handles final settling and movement summary.
+
+door_motor
+  - Encapsulates DRV8833 output.
+  - Owns STBY, AIN1 and AIN2.
+  - Applies PWM to LEFT or RIGHT.
+  - Executes brake/coast stop behavior.
+  - Tracks current physical motor output state.
 ```
 
 State split:
@@ -109,8 +118,17 @@ enum DoorMotionState {
 };
 ```
 
-The main sketch remains the product/device coordinator.
-The motion module owns the automatic positioning logic.
+```cpp
+enum DoorMotorState {
+  DOOR_MOTOR_STOPPED,
+  DOOR_MOTOR_RIGHT,
+  DOOR_MOTOR_LEFT
+};
+```
+
+The main sketch remains the product/device coordinator.  
+The motion module owns automatic positioning logic.  
+The motor module owns only the physical DRV8833 output.
 
 ## Current control strategy
 
@@ -128,7 +146,7 @@ The current positioning strategy is:
 7. Print summary.
 ```
 
-PID will be introduced later inside the motion/positioning layer, not inside host/config logic.
+PID will be introduced later inside the motion/positioning layer, not inside host/config or motor output logic.
 
 ## JSON commands
 
@@ -176,9 +194,7 @@ Factory reset configuration:
 {"cmd":"factory-reset"}
 ```
 
-## Hardware validation
-
-Step 4 was validated in hardware with:
+## Mandatory validation sequence
 
 ```json
 {"info":"version"}
@@ -220,38 +236,19 @@ while moving:
 {"cmd":"stop"}
 ```
 
-Observed result:
+Expected result:
 
 ```text
-BOOT OK - v3.1-continuous-silent-measured-config-json-door-motion-step4
-
-{"info":"version"}      -> OK
-{"info":"all-params"}   -> OK, includes app_version
-{"pwm_move":75}         -> OK
-
-POS_2 -> reason=posicion_alcanzada, stall_count=0/3
-POS_3 -> reason=posicion_alcanzada, stall_count=0/3
-POS_1 -> reason=posicion_alcanzada, stall_count=0/3
-POS_3 -> reason=posicion_alcanzada, stall_count=0/3
-
-Host stop while moving -> reason=cancelado_por_host, stall_count=0/3
+Normal movements -> reason=posicion_alcanzada
+Host cancellation -> reason=cancelado_por_host
+stall_count=0/3 under the same hardware conditions validated in Step 4
+control_period_us=5000 preserved
+max_sensor_us and max_control_us comparable to Step 4
 ```
 
-Timing remained stable:
+## Validation rule
 
-```text
-control_period_us = 5000
-min_sample_dt_us  = 5000
-max_sample_dt_us  ≈ 5003 / 5005
-max_sensor_us     ≈ 32 / 39
-max_control_us    ≈ 40 / 59
-```
+This refactor is acceptable only if the hardware behavior remains equivalent to Step 4.
 
-## Validation conclusion
-
-The Step 4 refactor preserves the validated Step 3 physical behavior.
-
-The automatic positioning logic is now separated into `door_motion`, while the main sketch remains responsible for product coordination and validated hardware access.
-
-This version is a stable baseline before introducing PID or speed profiling.
+If timing, direction, PWM, stop behavior, stall detection or final summary changes without a clear reason, the refactor must be rejected.
 

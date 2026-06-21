@@ -9,19 +9,20 @@
 #include "encoders/as5048a/MagneticSensorAS5048A.h"
 #include "door_config.h"
 #include "door_motion.h"
+#include "door_motor.h"
 
 /*
   ============================================================
   PROYECTO: ESP32 MOTORIZED DOOR CONTROLLER
-  VERSION: v3.1-continuous-silent-measured-config-json-door-motion-step4
+  VERSION: v3.1-continuous-silent-measured-config-json-door-motion-motor-step5
 
   OBJETIVO DE ESTA VERSION
   ------------------------------------------------------------
-  Refactor conservador de la version step3 validada.
+  Refactor conservador de la version step4 validada.
 
-  Se separa el bloque de movimiento/posicionamiento automatico
-  en CDoorMotion, manteniendo el main como coordinador del
-  producto/dispositivo.
+  Se mantiene CDoorMotion como modulo de movimiento/posicionamiento
+  automatico y se extrae la salida fisica DRV8833 a CDoorMotor,
+  manteniendo el main como coordinador del producto/dispositivo.
 
   No cambia el comportamiento fisico validado:
     - mismos pines
@@ -46,6 +47,11 @@
       - llegada/cruce/stall/timeout
       - summary
 
+    door_motor:
+      - salida fisica DRV8833
+      - STBY / AIN1 / AIN2
+      - PWM / LEFT / RIGHT / STOP
+
     PID:
       - todavia NO implementado.
       - cuando entre, pertenece al bloque de movimiento/posicionamiento.
@@ -56,7 +62,7 @@
 // VERSION
 // ============================================================
 
-#define APP_VERSION "v3.1-continuous-silent-measured-config-json-door-motion-step4"
+#define APP_VERSION "v3.1-continuous-silent-measured-config-json-door-motion-motor-step5"
 
 // ============================================================
 // PINES
@@ -111,6 +117,7 @@ MagneticSensorAS5048A sensor(AS5048_CS);
 
 CDoorConfig Config;
 CDoorMotion DoorMotion;
+CDoorMotor DoorMotor;
 
 // ============================================================
 // ESTADOS DEL PRODUCTO / SALIDA FISICA
@@ -119,16 +126,9 @@ CDoorMotion DoorMotion;
 /*
   DeviceState representa el estado general del producto.
   DoorMotion tiene su propia maquina interna de posicionamiento.
-
-  MotorState no decide nada: solo refleja la salida fisica aplicada
-  al DRV8833.
+  DoorMotor refleja/ejecuta la salida fisica aplicada al DRV8833.
 */
 
-enum MotorState {
-  MOTOR_STOPPED,
-  MOTOR_RIGHT,
-  MOTOR_LEFT
-};
 
 enum DeviceState {
   DEV_IDLE,
@@ -136,10 +136,7 @@ enum DeviceState {
   DEV_POSITIONING
 };
 
-MotorState motorState = MOTOR_STOPPED;
 DeviceState deviceState = DEV_IDLE;
-
-bool driverEnabled = false;
 bool streamEnabled = false;
 
 // Ultima lectura del sensor
@@ -173,19 +170,6 @@ float angleErrorDeg(float currentDeg, float targetDeg) {
 
 float angleDistanceDeg(float aDeg, float bDeg) {
   return CDoorMotion::angle_distance_deg(aDeg, bDeg);
-}
-
-const char* motorStateName() {
-  switch (motorState) {
-    case MOTOR_RIGHT:
-      return "RIGHT";
-
-    case MOTOR_LEFT:
-      return "LEFT";
-
-    default:
-      return "STOP";
-  }
 }
 
 const char* deviceStateName() {
@@ -250,7 +234,7 @@ void printSensor() {
   Serial.print(lastVelRadS, 5);
 
   Serial.print("  motor=");
-  Serial.print(motorStateName());
+  Serial.print(DoorMotor.state_name());
 
   Serial.print("  pwm=");
   Serial.print(Config.get_pwm_move());
@@ -272,67 +256,21 @@ void printSensor() {
 // MOTOR / DRV8833
 // ============================================================
 
-void motorCoast() {
-  ledcWrite(AIN1_PIN, 0);
-  ledcWrite(AIN2_PIN, 0);
-}
-
-void motorStopBrake() {
-  ledcWrite(AIN1_PIN, 255);
-  ledcWrite(AIN2_PIN, 255);
-  delay(30);
-  motorCoast();
-}
-
-void driverEnable() {
-  if (driverEnabled) {
-    return;
-  }
-
-  digitalWrite(STBY_PIN, HIGH);
-  delay(10);
-  driverEnabled = true;
-}
-
-void driverDisable() {
-  motorCoast();
-  digitalWrite(STBY_PIN, LOW);
-  driverEnabled = false;
-}
-
 void stopMotorOnly() {
-  motorStopBrake();
-  motorState = MOTOR_STOPPED;
+  DoorMotor.stop_only();
   deviceState = DEV_IDLE;
-  driverDisable();
 }
 
 void stopMotorOutputOnly() {
-  motorStopBrake();
-  motorState = MOTOR_STOPPED;
-  driverDisable();
+  DoorMotor.stop_output_only();
 }
 
 void motorRightContinuous() {
-  driverEnable();
-
-  // RIGHT / REWIND logico: baja angulo.
-  // Mantener este mapeo porque fue validado en v3.0.
-  ledcWrite(AIN1_PIN, Config.get_pwm_move());
-  ledcWrite(AIN2_PIN, 0);
-
-  motorState = MOTOR_RIGHT;
+  DoorMotor.right_continuous(Config.get_pwm_move());
 }
 
 void motorLeftContinuous() {
-  driverEnable();
-
-  // LEFT / FORWARD logico: sube angulo.
-  // Mantener este mapeo porque fue validado en v3.0.
-  ledcWrite(AIN1_PIN, 0);
-  ledcWrite(AIN2_PIN, Config.get_pwm_move());
-
-  motorState = MOTOR_LEFT;
+  DoorMotor.left_continuous(Config.get_pwm_move());
 }
 
 void commandRightManual() {
@@ -354,7 +292,7 @@ void checkMotorTimeout() {
     return;
   }
 
-  if (motorState == MOTOR_STOPPED) {
+  if (DoorMotor.is_stopped()) {
     return;
   }
 
@@ -366,7 +304,6 @@ void checkMotorTimeout() {
     printSensor();
   }
 }
-
 // ============================================================
 // COMANDOS / INFO LOCAL
 // ============================================================
@@ -521,17 +458,11 @@ void setup() {
     Serial.println("ERROR: no se pudo inicializar Config/NVS. Se usan defaults RAM.");
   }
 
-  pinMode(STBY_PIN, OUTPUT);
   pinMode(FC_L_PIN, INPUT_PULLUP);
 
-  digitalWrite(STBY_PIN, LOW);
-  driverEnabled = false;
+  DoorMotor.begin(STBY_PIN, AIN1_PIN, AIN2_PIN, PWM_FREQ, PWM_RES);
+
   deviceState = DEV_IDLE;
-
-  ledcAttach(AIN1_PIN, PWM_FREQ, PWM_RES);
-  ledcAttach(AIN2_PIN, PWM_FREQ, PWM_RES);
-
-  motorCoast();
 
   SPI.begin(AS5048_SCK, AS5048_MISO, AS5048_MOSI, AS5048_CS);
   sensor.init(&SPI);
