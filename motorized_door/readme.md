@@ -1,197 +1,238 @@
-# ESP32 Motorized Door Controller
+## Step 8A - Motion mode configurable y perfil approach no-PID
 
-Experimental motorized door controller based on an ESP32-S3, DRV8833 motor driver, N20 DC motor, and AS5048A magnetic angle sensor.
-
-## Current version
-
-```cpp
-v3.1-continuous-silent-measured-config-json-door-motion-motor-sensor-log-step7
-```
-
-## Baseline
-
-Previous validated version:
-
-```cpp
-v3.1-continuous-silent-measured-config-json-door-motion-motor-step5
-```
-
-Step 5 validated that extracting the DRV8833/PWM output to `CDoorMotor` did not change the physical behavior.
-
-## Step 6 objective
-
-This version performs another conservative refactor: the AS5048A SPI angle sensor code was moved out of `motorized_door.ino` into a dedicated sensor module.
-
-No control strategy change was intended.
-
-## Files
+Versión validada:
 
 ```text
-motorized_door.ino        Main/device coordinator.
-door_config.h/.cpp       JSON host protocol, RAM/NVS configuration and pending requests.
-door_motion.h/.cpp       Automatic positioning/motion state machine.
-door_motor.h/.cpp        DRV8833/PWM motor output.
-door_angle_sensor.h/.cpp AS5048A SPI angle sensor input.
-readme.md                Project notes.
+v3.1-continuous-silent-measured-config-json-door-motion-motor-sensor-log-step8A-motion-mode
 ```
 
-## Architecture
+### Objetivo de la etapa
+
+Esta etapa agrega un modo de movimiento configurable sin modificar la lógica base de posicionamiento validada en Step 7.
+
+El objetivo no es implementar PID todavía, sino incorporar un perfil no-PID simple que permita comparar:
+
+* PWM fijo en lazo abierto.
+* Perfil de arranque y acercamiento al punto.
+* Comportamiento sin carga.
+* Comportamiento con carga.
+* Cantidad de parámetros necesarios cuando se intenta resolver el problema solo con configuración empírica.
+
+La conclusión principal es que el perfil approach puede mejorar la confiabilidad de arranque y reducir algunos errores, pero también aumenta el universo de configuración. Esto justifica avanzar hacia identificación de planta y control cerrado PD/PID.
+
+---
+
+### Arquitectura actual
+
+El firmware mantiene la separación de responsabilidades:
 
 ```text
-main / product coordinator
-  - setup / loop
-  - JSON request coordination
-  - DeviceState
-  - connects Config, Motion, Motor and Sensor
+motorized_door.ino
+  Coordina el producto.
+  Mantiene DeviceState.
+  Crea e inyecta objetos físicos.
+  Procesa requests pendientes de Config.
+  No contiene lógica fina de movimiento.
 
 door_config
-  - JSON
-  - NVS
-  - persisted parameters
+  Protocolo JSON host.
+  Parámetros persistentes en NVS.
+  Requests pendientes.
+  No toca lógica física ni FSM de movimiento.
 
 door_motion
-  - automatic positioning state machine
-  - target, direction, arrival, crossing, stall, timeout, cancel, summary
+  FSM de posicionamiento automático.
+  Llegada, cruce, stall, timeout, settle final, cancelación y summary.
+  Incorpora selección de estrategia PWM según motion_mode.
 
 door_motor
-  - DRV8833 output
-  - STBY, AIN1, AIN2, PWM
-  - LEFT, RIGHT, STOP
+  Driver DRV8833 / PWM.
 
 door_angle_sensor
-  - AS5048A SPI initialization
-  - sensor.update()
-  - angle rad/deg
-  - velocity
-  - sensor_us timing
+  Wrapper conservador del AS5048A.
+  El objeto MagneticSensorAS5048A y la inicialización SPI siguen viviendo en el .ino.
+
+log
+  Clog para mensajes humanos.
+  JSON sigue saliendo por Serial directo.
 ```
 
-## Hardware pins
+---
 
-| Function          | ESP32-S3 GPIO |
-| ----------------- | ------------: |
-| DRV8833 AIN1      |        GPIO17 |
-| DRV8833 AIN2      |        GPIO16 |
-| DRV8833 STBY      |         GPIO4 |
-| AS5048A CSn       |        GPIO10 |
-| AS5048A MOSI      |        GPIO11 |
-| AS5048A SCK       |        GPIO12 |
-| AS5048A MISO      |        GPIO13 |
-| FC_L limit switch |        GPIO14 |
+### Modos de movimiento
 
-## Validated positions
+Se agregó el parámetro persistente:
 
-| Position |   Angle |
-| -------- | ------: |
-| POS_1    |   2.29° |
-| POS_2    | 291.23° |
-| POS_3    | 206.06° |
+```json
+{"motion_mode":0}
+```
 
-## Motor direction convention
+Valores disponibles:
 
 ```text
-LEFT / FORWARD  -> increases measured angle
-RIGHT / REWIND  -> decreases measured angle
+motion_mode = 0
+  Modo simple / fixed PWM.
+  Usa pwm_move.
+  Conserva el comportamiento validado de Step 7.
+
+motion_mode = 1
+  Modo approach / perfil no-PID.
+  Usa boost de arranque, PWM base y PWM reducido cerca del objetivo.
 ```
 
-## JSON validation sequence
+---
+
+### Nuevos parámetros configurables
+
+Para `motion_mode=1` se agregaron:
 
 ```json
-{"info":"version"}
+{"pwm_start":80}
+{"pwm_slow":60}
+{"slow_zone_deg":20}
+{"start_boost_ms":120}
 ```
+
+Significado:
+
+```text
+pwm_start
+  PWM inicial para vencer rozamiento/carga.
+
+pwm_move
+  PWM principal del recorrido.
+
+pwm_slow
+  PWM reducido cerca del target.
+
+slow_zone_deg
+  Zona angular donde se usa pwm_slow.
+
+start_boost_ms
+  Tiempo inicial durante el cual se aplica pwm_start.
+```
+
+Configuración usada en la validación Step 8A:
 
 ```json
-{"info":"all-params"}
+{"motion_mode":1}
+{"pwm_move":70}
+{"pwm_start":80}
+{"pwm_slow":60}
+{"slow_zone_deg":20}
+{"start_boost_ms":120}
 ```
 
-```json
-{"pwm_move":75}
+---
+
+### Validación funcional
+
+Se validó primero `motion_mode=0` para confirmar que el comportamiento de Step 7 seguía intacto.
+
+Luego se probó `motion_mode=1` con la misma secuencia de movimientos:
+
+```text
+POS_1 -> POS_2
+POS_2 -> POS_3
+POS_3 -> POS_2
+POS_2 -> POS_1
 ```
 
-```json
-{"cmd":"go","pos":2}
-```
-
-```json
-{"cmd":"go","pos":3}
-```
-
-```json
-{"cmd":"go","pos":1}
-```
-
-```json
-{"cmd":"go","pos":3}
-```
-
-Cancellation:
-
-```json
-{"cmd":"go","pos":1}
-```
-
-while moving:
+También se probó cancelación por host con:
 
 ```json
 {"cmd":"stop"}
 ```
 
-Expected result:
+Resultados generales:
 
 ```text
-normal movement -> reason=posicion_alcanzada
-host stop       -> reason=cancelado_por_host
-stall_count     -> 0/3 under normal conditions with pwm_move=75
-control_period_us remains 5000
-sensor_us and control_us remain close to Step 5
+motion_mode=0
+  Conserva el comportamiento base.
+  Reproduce las limitaciones esperadas del PWM fijo.
+  PWM 70 sigue cerca del límite de arranque.
+
+motion_mode=1
+  No generó stalls en las tandas realizadas.
+  Mejoró algunos recorridos, especialmente con carga.
+  No eliminó todos los sobrepasos.
+  El recorrido POS_1 -> POS_2 sigue siendo uno de los más críticos.
 ```
 
-## Notes
+---
 
-PID is still not implemented. The current control strategy remains fixed PWM positioning.
+### Comparación con informe v3.1 monolítico
 
-PID should later be introduced inside the motion/positioning layer, not inside host/config or the main product coordinator.
+El informe anterior de v3.1 mostraba que con PWM fijo no existía un único valor que garantizara simultáneamente:
 
+* Arranque confiable.
+* Bajo sobrepaso.
+* Buen comportamiento con carga.
+* Buen comportamiento en ambos sentidos.
 
-## Step 6a note
-
-Step 6 original movia tambien la construccion/inicializacion del AS5048A y en hardware la lectura quedo clavada en 0.00. Step 6a mantiene SPI.begin() y sensor.init(&SPI) exactamente como Step 5 validado, y solo encapsula lectura/estado en CDoorAngleSensor.
-
-
-## Step 7 objective
-
-This version adds a small logging layer for human/debug messages.
-
-The host JSON protocol is not changed. JSON command responses, parameter replies and protocol errors remain handled directly by `door_config` through `Serial`.
-
-`Log.msg(...)` is used only for human-readable messages from the main sketch, such as boot details, diagnostic sensor line, manual movement messages and non-protocol warnings.
-
-`Log` is controlled by the persisted `log_level` parameter:
+Resumen comparativo:
 
 ```text
-0 = LOG_DISABLED
-1 = LOG_MSG
-2 = LOG_CTRL_JSON
-3 = LOG_CTRL_ARDUINO_PLOTTER
+PWM fijo 70, v3.1 monolítica:
+  2 g -> stalls puntuales.
+  8 g -> stalls puntuales.
+  La carga reducía algunos errores, pero aumentaba el riesgo de no arrancar.
+
+Step 8A, motion_mode=1:
+  2 g -> sin stalls observados.
+  8 g -> sin stalls observados.
+  Error promedio comparable o mejor.
+  Se mantiene sobrepaso en algunos recorridos.
 ```
 
-For this firmware, `Serial.begin()` remains owned by `motorized_door.ino`. The log class does not initialize Serial.
+Esto confirma que el perfil approach es una mejora intermedia útil, pero no una solución definitiva.
 
-Current Step 7 scope:
+---
+
+### Documentación generada
+
+Se agregó un informe comparativo para usar como material explicativo:
 
 ```text
-changed:
-  - add log.h / log.cpp
-  - add global Clog Log
-  - sync Log level from Config.get_log_level()
-  - route main-sketch human messages through Log.msg()
-  - remove unused local printVersion / printPositions / printHelp helpers from the .ino
-
-not changed:
-  - JSON host protocol
-  - door_config communication
-  - door_motion behavior
-  - door_motor behavior
-  - door_angle_sensor behavior
-  - control timing / PWM / stall / timeout / target criteria
+informe_step8A_approach_pid.docx
+informe_step8A_approach_pid.pdf
 ```
+
+El informe incluye:
+
+* Comparación con v3.1 monolítica.
+* Gráficos de error promedio.
+* Gráficos de stalls.
+* Gráficos de error máximo.
+* Error firmado por recorrido.
+* Explicación del aumento del universo de configuración.
+* Justificación de evolución hacia identificación de planta y PID/PD.
+
+---
+
+### Conclusión técnica
+
+Step 8A demuestra que se puede mejorar el comportamiento del sistema sin cambiar todavía a PID, usando un perfil simple de PWM.
+
+Sin embargo, la mejora requiere nuevos parámetros:
+
+```text
+pwm_move
+pwm_start
+pwm_slow
+slow_zone_deg
+start_boost_ms
+```
+
+Cada cambio mecánico, carga, rozamiento o alimentación puede requerir nuevas inferencias y nuevos ajustes.
+
+Por eso, el siguiente paso conceptual no debería ser seguir acumulando parámetros empíricos, sino avanzar hacia:
+
+```text
+1. Levantamiento de curvas de planta.
+2. Identificación de constantes dinámicas.
+3. Diseño de control PD/PID.
+4. Implementación controlada y validada sobre la FSM existente.
+```
+
+El proyecto queda preparado para explicar, de forma teórica y práctica, por qué se justifica el uso de PID en un sistema real con motor, carga, inercia, rozamiento y sensor absoluto de posición.

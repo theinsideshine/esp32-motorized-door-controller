@@ -17,7 +17,7 @@
 /*
   ============================================================
   PROYECTO: ESP32 MOTORIZED DOOR CONTROLLER
-  VERSION: v3.1-continuous-silent-measured-config-json-door-motion-motor-sensor-log-step7
+  VERSION: v3.1-continuous-silent-measured-config-json-door-motion-motor-sensor-log-step8-motion-mode
 
   OBJETIVO DE ESTA VERSION
   ------------------------------------------------------------
@@ -71,7 +71,7 @@
 // VERSION
 // ============================================================
 
-#define APP_VERSION "v3.1-continuous-silent-measured-config-json-door-motion-motor-sensor-log-step7"
+#define APP_VERSION "v3.1-continuous-silent-measured-config-json-door-motion-motor-sensor-log-step8A-motion-mode"
 
 // ============================================================
 // PINES
@@ -243,25 +243,25 @@ void stopMotorOutputOnly() {
   DoorMotor.stop_output_only();
 }
 
-void motorRightContinuous() {
-  DoorMotor.right_continuous(Config.get_pwm_move());
+void motorRightContinuous(uint8_t pwm) {
+  DoorMotor.right_continuous(pwm);
 }
 
-void motorLeftContinuous() {
-  DoorMotor.left_continuous(Config.get_pwm_move());
+void motorLeftContinuous(uint8_t pwm) {
+  DoorMotor.left_continuous(pwm);
 }
 
 void commandRightManual() {
   Log.msg(F("CMD MOTOR RIGHT MANUAL"));
   deviceState = DEV_MANUAL_MOVING;
-  motorRightContinuous();
+  motorRightContinuous((uint8_t)Config.get_pwm_move());
   lastManualMoveMs = millis();
 }
 
 void commandLeftManual() {
   Log.msg(F("CMD MOTOR LEFT MANUAL"));
   deviceState = DEV_MANUAL_MOVING;
-  motorLeftContinuous();
+  motorLeftContinuous((uint8_t)Config.get_pwm_move());
   lastManualMoveMs = millis();
 }
 

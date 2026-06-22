@@ -41,6 +41,8 @@ CDoorMotion::CDoorMotion()
   maxSensorUs = 0;
   maxControlUs = 0;
 
+  activePwm = 0;
+
   cb.read_sensor_deg = nullptr;
   cb.get_last_sensor_read_us = nullptr;
   cb.is_fc_l_active = nullptr;
@@ -264,6 +266,41 @@ float CDoorMotion::read_sensor(bool countForMotionStats)
   return deg;
 }
 
+uint8_t CDoorMotion::compute_motion_pwm(float absErrorDeg) const
+{
+  if (cfg == nullptr) {
+    return 0;
+  }
+
+  if (cfg->get_motion_mode() == DOOR_MOTION_MODE_APPROACH) {
+    unsigned long elapsedMs = millis() - startMs;
+
+    if (elapsedMs < cfg->get_start_boost_ms()) {
+      return (uint8_t)cfg->get_pwm_start();
+    }
+
+    if (cfg->get_slow_zone_deg() > 0.0f && absErrorDeg <= cfg->get_slow_zone_deg()) {
+      return (uint8_t)cfg->get_pwm_slow();
+    }
+  }
+
+  return (uint8_t)cfg->get_pwm_move();
+}
+
+void CDoorMotion::apply_motion_pwm(uint8_t pwm)
+{
+  activePwm = pwm;
+
+  if (direction == DOOR_MOTION_DIR_RIGHT) {
+    cb.motor_right_continuous(activePwm);
+    return;
+  }
+
+  if (direction == DOOR_MOTION_DIR_LEFT) {
+    cb.motor_left_continuous(activePwm);
+  }
+}
+
 void CDoorMotion::print_summary(const char* reason, float finalDeg, float finalErrorDeg)
 {
   unsigned long runMs = millis() - startMs;
@@ -298,8 +335,25 @@ void CDoorMotion::print_summary(const char* reason, float finalDeg, float finalE
   Serial.print("final_error_deg=");
   Serial.println(finalErrorDeg, 2);
 
-  Serial.print("pwm=");
+  Serial.print("pwm_move=");
   Serial.println(cfg->get_pwm_move());
+
+  Serial.print("motion_mode=");
+  Serial.println(cfg->get_motion_mode());
+
+  if (cfg->get_motion_mode() == DOOR_MOTION_MODE_APPROACH) {
+    Serial.print("pwm_start=");
+    Serial.println(cfg->get_pwm_start());
+
+    Serial.print("pwm_slow=");
+    Serial.println(cfg->get_pwm_slow());
+
+    Serial.print("slow_zone_deg=");
+    Serial.println(cfg->get_slow_zone_deg(), 2);
+
+    Serial.print("start_boost_ms=");
+    Serial.println(cfg->get_start_boost_ms());
+  }
 
   Serial.print("direction=");
   Serial.println(direction_name());
@@ -409,7 +463,12 @@ void CDoorMotion::start_step()
   finishReason = "ninguna";
   finishWasCancel = false;
 
+  activePwm = 0;
+
   reset_stats();
+
+  float absStartErrorDeg = fabs(startErrorDeg);
+  uint8_t startPwm = compute_motion_pwm(absStartErrorDeg);
 
   Serial.println();
   Serial.print("AUTO START CONTINUO SILENCIOSO -> ");
@@ -421,7 +480,9 @@ void CDoorMotion::start_step()
   Serial.print("  error=");
   Serial.print(startErrorDeg, 2);
   Serial.print("  pwm=");
-  Serial.println(cfg->get_pwm_move());
+  Serial.print(startPwm);
+  Serial.print("  motion_mode=");
+  Serial.println(cfg->get_motion_mode());
 
   if (fabs(startErrorDeg) <= cfg->get_auto_tolerance_deg()) {
     direction = DOOR_MOTION_DIR_NONE;
@@ -435,12 +496,12 @@ void CDoorMotion::start_step()
     // current > target: bajar angulo
     direction = DOOR_MOTION_DIR_RIGHT;
     Serial.println("AUTO DIR: RIGHT / REWIND logico / baja angulo");
-    cb.motor_right_continuous();
+    apply_motion_pwm(startPwm);
   } else {
     // current < target: subir angulo
     direction = DOOR_MOTION_DIR_LEFT;
     Serial.println("AUTO DIR: LEFT / FORWARD logico / sube angulo");
-    cb.motor_left_continuous();
+    apply_motion_pwm(startPwm);
   }
 
   // Forzamos que el primer control se ejecute enseguida.
@@ -498,6 +559,12 @@ void CDoorMotion::moving_step()
     return;
   }
 
+  uint8_t desiredPwm = compute_motion_pwm(absErrorDeg);
+
+  if (desiredPwm != activePwm) {
+    apply_motion_pwm(desiredPwm);
+  }
+
   // Deteccion de sin movimiento.
   if (millis() - lastStallCheckMs >= cfg->get_auto_stall_check_ms()) {
     float movedDeg = angle_distance_deg(currentDeg, lastStallDeg);
@@ -534,7 +601,9 @@ void CDoorMotion::moving_step()
     Serial.print(" samples=");
     Serial.print(samples);
     Serial.print(" pwm=");
-    Serial.println(cfg->get_pwm_move());
+    Serial.print(activePwm);
+    Serial.print(" mode=");
+    Serial.println(cfg->get_motion_mode());
   }
 
   uint32_t controlUs = micros() - controlStartUs;

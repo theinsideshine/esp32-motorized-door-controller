@@ -55,6 +55,17 @@
 
 #define DOOR_LOG_LEVEL_DEFAULT                1UL
 
+// Movimiento: modo 0 mantiene baseline fixed PWM.
+// Modo 1 agrega perfil no-PID de aproximacion.
+#define DOOR_MOTION_MODE_FIXED_PWM             0UL
+#define DOOR_MOTION_MODE_APPROACH              1UL
+#define DOOR_MOTION_MODE_DEFAULT               DOOR_MOTION_MODE_FIXED_PWM
+
+#define DOOR_PWM_START_DEFAULT                 80UL
+#define DOOR_PWM_SLOW_DEFAULT                  60UL
+#define DOOR_SLOW_ZONE_DEG_DEFAULT             20.0f
+#define DOOR_START_BOOST_MS_DEFAULT            120UL
+
 // ============================================================
 // MODO / PEDIDOS HOST
 // ============================================================
@@ -93,6 +104,11 @@ public:
       {"pos2_deg":291.23}
       {"pos3_deg":206.06}
       {"log_level":1}
+      {"motion_mode":0}
+      {"pwm_start":80}
+      {"pwm_slow":60}
+      {"slow_zone_deg":20}
+      {"start_boost_ms":120}
   */
   void host_cmd();
 
@@ -106,6 +122,12 @@ public:
   float get_pos_deg(uint8_t pos) const;
 
   uint32_t get_pwm_move() const;
+
+  uint32_t get_motion_mode() const;
+  uint32_t get_pwm_start() const;
+  uint32_t get_pwm_slow() const;
+  float get_slow_zone_deg() const;
+  uint32_t get_start_boost_ms() const;
 
   uint32_t get_control_period_us() const;
 
@@ -129,6 +151,12 @@ public:
   void set_pos3_deg(float value);
 
   void set_pwm_move(uint32_t value);
+
+  void set_motion_mode(uint32_t value);
+  void set_pwm_start(uint32_t value);
+  void set_pwm_slow(uint32_t value);
+  void set_slow_zone_deg(float value);
+  void set_start_boost_ms(uint32_t value);
 
   void set_control_period_us(uint32_t value);
 
@@ -170,6 +198,12 @@ private:
   float pos3_deg;
 
   uint32_t pwm_move;
+
+  uint32_t motion_mode;
+  uint32_t pwm_start;
+  uint32_t pwm_slow;
+  float slow_zone_deg;
+  uint32_t start_boost_ms;
 
   uint32_t control_period_us;
 
@@ -214,6 +248,7 @@ private:
   float normalize_deg(float deg) const;
   bool valid_float(float value) const;
   uint32_t clamp_pwm(uint32_t value) const;
+  uint32_t sanitize_motion_mode(uint32_t value) const;
 };
 
 #endif // DOOR_CONFIG_H

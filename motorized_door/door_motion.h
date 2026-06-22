@@ -21,7 +21,8 @@
     - NO conoce pines.
     - NO crea clases de motor ni sensor.
     - Usa callbacks a funciones fisicas ya validadas en el main.
-    - Mantiene PWM fijo; PID todavia NO entra en esta version.
+    - Mantiene modo fixed PWM como baseline y permite perfil
+      approach no-PID configurable. PID todavia NO entra en esta version.
   ============================================================
 */
 
@@ -44,8 +45,8 @@ struct DoorMotionCallbacks {
   float (*read_sensor_deg)(bool count_for_motion_stats);
   uint32_t (*get_last_sensor_read_us)();
   bool (*is_fc_l_active)();
-  void (*motor_right_continuous)();
-  void (*motor_left_continuous)();
+  void (*motor_right_continuous)(uint8_t pwm);
+  void (*motor_left_continuous)(uint8_t pwm);
   void (*stop_motor_output_only)();
 };
 
@@ -114,10 +115,15 @@ private:
   uint32_t maxSensorUs;
   uint32_t maxControlUs;
 
+  uint8_t activePwm;
+
   void reset_stats();
   void register_sample_timing(uint32_t nowUs);
 
   float read_sensor(bool countForMotionStats);
+
+  uint8_t compute_motion_pwm(float absErrorDeg) const;
+  void apply_motion_pwm(uint8_t pwm);
 
   void start_step();
   void moving_step();

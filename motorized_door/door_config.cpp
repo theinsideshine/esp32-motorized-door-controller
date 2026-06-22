@@ -60,6 +60,12 @@ void CDoorConfig::load_defaults()
 
   pwm_move = DOOR_PWM_MOVE_DEFAULT;
 
+  motion_mode = DOOR_MOTION_MODE_DEFAULT;
+  pwm_start = DOOR_PWM_START_DEFAULT;
+  pwm_slow = DOOR_PWM_SLOW_DEFAULT;
+  slow_zone_deg = DOOR_SLOW_ZONE_DEG_DEFAULT;
+  start_boost_ms = DOOR_START_BOOST_MS_DEFAULT;
+
   control_period_us = DOOR_CONTROL_PERIOD_US_DEFAULT;
 
   auto_tolerance_deg = DOOR_AUTO_TOLERANCE_DEG_DEFAULT;
@@ -85,6 +91,12 @@ bool CDoorConfig::load_from_nvs()
   pos3_deg = normalize_deg(prefs.getFloat("pos3", DOOR_POS_3_DEFAULT_DEG));
 
   pwm_move = clamp_pwm(prefs.getUInt("pwm", DOOR_PWM_MOVE_DEFAULT));
+
+  motion_mode = sanitize_motion_mode(prefs.getUInt("mmode", DOOR_MOTION_MODE_DEFAULT));
+  pwm_start = clamp_pwm(prefs.getUInt("pwmstart", DOOR_PWM_START_DEFAULT));
+  pwm_slow = clamp_pwm(prefs.getUInt("pwmslow", DOOR_PWM_SLOW_DEFAULT));
+  slow_zone_deg = prefs.getFloat("slowzone", DOOR_SLOW_ZONE_DEG_DEFAULT);
+  start_boost_ms = prefs.getUInt("boostms", DOOR_START_BOOST_MS_DEFAULT);
 
   control_period_us = prefs.getUInt("period", DOOR_CONTROL_PERIOD_US_DEFAULT);
 
@@ -123,6 +135,10 @@ bool CDoorConfig::load_from_nvs()
     auto_min_move_deg = DOOR_AUTO_MIN_MOVE_DEG_DEFAULT;
   }
 
+  if (!valid_float(slow_zone_deg) || slow_zone_deg < 0.0f) {
+    slow_zone_deg = DOOR_SLOW_ZONE_DEG_DEFAULT;
+  }
+
   if (control_period_us == 0) {
     control_period_us = DOOR_CONTROL_PERIOD_US_DEFAULT;
   }
@@ -156,6 +172,12 @@ void CDoorConfig::save_all()
   prefs.putFloat("pos3", pos3_deg);
 
   prefs.putUInt("pwm", pwm_move);
+
+  prefs.putUInt("mmode", motion_mode);
+  prefs.putUInt("pwmstart", pwm_start);
+  prefs.putUInt("pwmslow", pwm_slow);
+  prefs.putFloat("slowzone", slow_zone_deg);
+  prefs.putUInt("boostms", start_boost_ms);
 
   prefs.putUInt("period", control_period_us);
 
@@ -210,6 +232,31 @@ float CDoorConfig::get_pos_deg(uint8_t pos) const
 uint32_t CDoorConfig::get_pwm_move() const
 {
   return pwm_move;
+}
+
+uint32_t CDoorConfig::get_motion_mode() const
+{
+  return motion_mode;
+}
+
+uint32_t CDoorConfig::get_pwm_start() const
+{
+  return pwm_start;
+}
+
+uint32_t CDoorConfig::get_pwm_slow() const
+{
+  return pwm_slow;
+}
+
+float CDoorConfig::get_slow_zone_deg() const
+{
+  return slow_zone_deg;
+}
+
+uint32_t CDoorConfig::get_start_boost_ms() const
+{
+  return start_boost_ms;
 }
 
 uint32_t CDoorConfig::get_control_period_us() const
@@ -311,6 +358,55 @@ void CDoorConfig::set_pwm_move(uint32_t value)
 
   if (nvs_ready) {
     prefs.putUInt("pwm", pwm_move);
+  }
+}
+
+void CDoorConfig::set_motion_mode(uint32_t value)
+{
+  motion_mode = sanitize_motion_mode(value);
+
+  if (nvs_ready) {
+    prefs.putUInt("mmode", motion_mode);
+  }
+}
+
+void CDoorConfig::set_pwm_start(uint32_t value)
+{
+  pwm_start = clamp_pwm(value);
+
+  if (nvs_ready) {
+    prefs.putUInt("pwmstart", pwm_start);
+  }
+}
+
+void CDoorConfig::set_pwm_slow(uint32_t value)
+{
+  pwm_slow = clamp_pwm(value);
+
+  if (nvs_ready) {
+    prefs.putUInt("pwmslow", pwm_slow);
+  }
+}
+
+void CDoorConfig::set_slow_zone_deg(float value)
+{
+  if (!valid_float(value) || value < 0.0f) {
+    return;
+  }
+
+  slow_zone_deg = value;
+
+  if (nvs_ready) {
+    prefs.putFloat("slowzone", slow_zone_deg);
+  }
+}
+
+void CDoorConfig::set_start_boost_ms(uint32_t value)
+{
+  start_boost_ms = value;
+
+  if (nvs_ready) {
+    prefs.putUInt("boostms", start_boost_ms);
   }
 }
 
@@ -489,7 +585,7 @@ void CDoorConfig::host_cmd()
     return;
   }
 
-  StaticJsonDocument<768> doc;
+  StaticJsonDocument<1024> doc;
   DeserializationError error = deserializeJson(doc, Serial);
 
   if (error) {
@@ -542,6 +638,36 @@ void CDoorConfig::process_json(JsonDocument& doc)
   if (doc.containsKey("pwm_move")) {
     set_pwm_move(doc["pwm_move"].as<uint32_t>());
     doc["pwm_move"] = pwm_move;
+    known_key = true;
+  }
+
+  if (doc.containsKey("motion_mode")) {
+    set_motion_mode(doc["motion_mode"].as<uint32_t>());
+    doc["motion_mode"] = motion_mode;
+    known_key = true;
+  }
+
+  if (doc.containsKey("pwm_start")) {
+    set_pwm_start(doc["pwm_start"].as<uint32_t>());
+    doc["pwm_start"] = pwm_start;
+    known_key = true;
+  }
+
+  if (doc.containsKey("pwm_slow")) {
+    set_pwm_slow(doc["pwm_slow"].as<uint32_t>());
+    doc["pwm_slow"] = pwm_slow;
+    known_key = true;
+  }
+
+  if (doc.containsKey("slow_zone_deg")) {
+    set_slow_zone_deg(doc["slow_zone_deg"].as<float>());
+    doc["slow_zone_deg"] = slow_zone_deg;
+    known_key = true;
+  }
+
+  if (doc.containsKey("start_boost_ms")) {
+    set_start_boost_ms(doc["start_boost_ms"].as<uint32_t>());
+    doc["start_boost_ms"] = start_boost_ms;
     known_key = true;
   }
 
@@ -688,7 +814,7 @@ void CDoorConfig::process_json(JsonDocument& doc)
 
 void CDoorConfig::send_all_params()
 {
-  StaticJsonDocument<768> doc;
+  StaticJsonDocument<1024> doc;
 
   doc["info"] = "all-params";
   doc["result"] = "ok";
@@ -702,6 +828,12 @@ void CDoorConfig::send_all_params()
   doc["pos3_deg"] = pos3_deg;
 
   doc["pwm_move"] = pwm_move;
+
+  doc["motion_mode"] = motion_mode;
+  doc["pwm_start"] = pwm_start;
+  doc["pwm_slow"] = pwm_slow;
+  doc["slow_zone_deg"] = slow_zone_deg;
+  doc["start_boost_ms"] = start_boost_ms;
 
   doc["control_period_us"] = control_period_us;
 
@@ -846,4 +978,13 @@ uint32_t CDoorConfig::clamp_pwm(uint32_t value) const
   }
 
   return value;
+}
+
+uint32_t CDoorConfig::sanitize_motion_mode(uint32_t value) const
+{
+  if (value == DOOR_MOTION_MODE_APPROACH) {
+    return DOOR_MOTION_MODE_APPROACH;
+  }
+
+  return DOOR_MOTION_MODE_FIXED_PWM;
 }
