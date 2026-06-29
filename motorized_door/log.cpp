@@ -75,3 +75,24 @@ void Clog::ctrl( uint16_t raw, uint16_t filtered, uint8_t state, uint16_t danger
                   raw, filtered, scale, danger_point );
     }
 }
+
+// Salida minima para Arduino Serial Plotter.
+// Se usa para mirar la planta: entrada PWM fija -> salida angular.
+// No reemplaza a ctrl() ni a los mensajes humanos.
+// Salida minima para Arduino Serial Plotter.
+// Se usa para mirar la respuesta hacia el setpoint:
+// error firmado, error absoluto y PWM configurado.
+// No cambia el control ni reemplaza a ctrl().
+void Clog::plant_plot(float travel_deg, float target_travel_deg)
+{
+    if (level != LOG_CTRL_ARDUINO_PLOTTER) {
+        return;
+    }
+
+    Serial.print(F("travel:"));
+    Serial.print(travel_deg, 2);
+
+    Serial.print('\t');
+    Serial.print(F("target:"));
+    Serial.println(target_travel_deg, 2);
+}

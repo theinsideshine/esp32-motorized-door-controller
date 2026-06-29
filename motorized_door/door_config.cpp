@@ -891,6 +891,10 @@ void CDoorConfig::send_error(const char* reason)
 
 void CDoorConfig::send_json(JsonDocument& doc)
 {
+  if (log_level == DOOR_LOG_LEVEL_PLOTTER) {
+    return;
+  }
+
   serializeJson(doc, Serial);
   Serial.println();
   Serial.println();
@@ -898,6 +902,10 @@ void CDoorConfig::send_json(JsonDocument& doc)
 
 void CDoorConfig::send_json_pretty(JsonDocument& doc)
 {
+  if (log_level == DOOR_LOG_LEVEL_PLOTTER) {
+    return;
+  }
+
   serializeJsonPretty(doc, Serial);
   Serial.println();
   Serial.println();
@@ -988,3 +996,4 @@ uint32_t CDoorConfig::sanitize_motion_mode(uint32_t value) const
 
   return DOOR_MOTION_MODE_FIXED_PWM;
 }
+

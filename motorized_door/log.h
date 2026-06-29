@@ -18,6 +18,7 @@ class Clog
     void init( uint8_t );
     void msg( const __FlashStringHelper *fmt, ... );
     void ctrl( uint16_t raw, uint16_t filtered, uint8_t state, uint16_t danger_point );
+    void plant_plot(float travel_deg, float target_travel_deg);
     void set_level(uint8_t);
 
   private:
@@ -27,3 +28,4 @@ class Clog
 };
 
 #endif // LOG_H
+

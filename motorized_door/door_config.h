@@ -53,7 +53,12 @@
 #define DOOR_AUTO_STALL_MAX_COUNT_DEFAULT     3UL
 #define DOOR_AUTO_FINAL_SETTLE_MS_DEFAULT     80UL
 
-#define DOOR_LOG_LEVEL_DEFAULT                1UL
+#define DOOR_LOG_LEVEL_DISABLED             0UL
+#define DOOR_LOG_LEVEL_MSG                  1UL
+#define DOOR_LOG_LEVEL_JSON                 2UL
+#define DOOR_LOG_LEVEL_PLOTTER              3UL
+
+#define DOOR_LOG_LEVEL_DEFAULT              DOOR_LOG_LEVEL_MSG
 
 // Movimiento: modo 0 mantiene baseline fixed PWM.
 // Modo 1 agrega perfil no-PID de aproximacion.

@@ -303,6 +303,10 @@ void CDoorMotion::apply_motion_pwm(uint8_t pwm)
 
 void CDoorMotion::print_summary(const char* reason, float finalDeg, float finalErrorDeg)
 {
+  if (cfg != nullptr && cfg->get_log_level() == DOOR_LOG_LEVEL_PLOTTER) {
+    return;
+  }
+
   unsigned long runMs = millis() - startMs;
 
   Serial.println();
@@ -429,7 +433,7 @@ void CDoorMotion::complete_settling_if_ready()
   float finalDeg = read_sensor(false);
   float finalError = angle_error_deg(finalDeg, targetDeg);
 
-  if (finishWasCancel) {
+  if (finishWasCancel && cfg->get_log_level() != DOOR_LOG_LEVEL_PLOTTER) {
     Serial.print("AUTO CANCELADO: ");
     Serial.println(finishReason);
   }
@@ -470,19 +474,21 @@ void CDoorMotion::start_step()
   float absStartErrorDeg = fabs(startErrorDeg);
   uint8_t startPwm = compute_motion_pwm(absStartErrorDeg);
 
-  Serial.println();
-  Serial.print("AUTO START CONTINUO SILENCIOSO -> ");
-  Serial.print(targetName);
-  Serial.print("  current=");
-  Serial.print(startDeg, 2);
-  Serial.print("  target=");
-  Serial.print(targetDeg, 2);
-  Serial.print("  error=");
-  Serial.print(startErrorDeg, 2);
-  Serial.print("  pwm=");
-  Serial.print(startPwm);
-  Serial.print("  motion_mode=");
-  Serial.println(cfg->get_motion_mode());
+  if (cfg->get_log_level() != DOOR_LOG_LEVEL_PLOTTER) {
+    Serial.println();
+    Serial.print("AUTO START CONTINUO SILENCIOSO -> ");
+    Serial.print(targetName);
+    Serial.print("  current=");
+    Serial.print(startDeg, 2);
+    Serial.print("  target=");
+    Serial.print(targetDeg, 2);
+    Serial.print("  error=");
+    Serial.print(startErrorDeg, 2);
+    Serial.print("  pwm=");
+    Serial.print(startPwm);
+    Serial.print("  motion_mode=");
+    Serial.println(cfg->get_motion_mode());
+  }
 
   if (fabs(startErrorDeg) <= cfg->get_auto_tolerance_deg()) {
     direction = DOOR_MOTION_DIR_NONE;
@@ -495,12 +501,20 @@ void CDoorMotion::start_step()
   if (startErrorDeg > 0.0f) {
     // current > target: bajar angulo
     direction = DOOR_MOTION_DIR_RIGHT;
-    Serial.println("AUTO DIR: RIGHT / REWIND logico / baja angulo");
+
+    if (cfg->get_log_level() != DOOR_LOG_LEVEL_PLOTTER) {
+      Serial.println("AUTO DIR: RIGHT / REWIND logico / baja angulo");
+    }
+
     apply_motion_pwm(startPwm);
   } else {
     // current < target: subir angulo
     direction = DOOR_MOTION_DIR_LEFT;
-    Serial.println("AUTO DIR: LEFT / FORWARD logico / sube angulo");
+
+    if (cfg->get_log_level() != DOOR_LOG_LEVEL_PLOTTER) {
+      Serial.println("AUTO DIR: LEFT / FORWARD logico / sube angulo");
+    }
+
     apply_motion_pwm(startPwm);
   }
 
@@ -585,7 +599,9 @@ void CDoorMotion::moving_step()
   }
 
   // Debug compacto opcional. Por defecto apagado.
-  if (debugAuto && millis() - lastDebugMs >= DOOR_MOTION_DEBUG_PERIOD_MS) {
+  if (debugAuto &&
+      cfg->get_log_level() != DOOR_LOG_LEVEL_PLOTTER &&
+      millis() - lastDebugMs >= DOOR_MOTION_DEBUG_PERIOD_MS) {
     lastDebugMs = millis();
 
     Serial.print("AUTO ");
@@ -612,3 +628,4 @@ void CDoorMotion::moving_step()
     maxControlUs = controlUs;
   }
 }
+

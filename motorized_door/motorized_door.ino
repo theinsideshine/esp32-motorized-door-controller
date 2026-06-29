@@ -17,7 +17,7 @@
 /*
   ============================================================
   PROYECTO: ESP32 MOTORIZED DOOR CONTROLLER
-  VERSION: v3.1-continuous-silent-measured-config-json-door-motion-motor-sensor-log-step8-motion-mode
+  VERSION: v3.1-continuous-silent-measured-config-json-door-motion-motor-sensor-log-step8E-travel-error-plotter
 
   OBJETIVO DE ESTA VERSION
   ------------------------------------------------------------
@@ -66,12 +66,65 @@
       - cuando entre, pertenece al bloque de movimiento/posicionamiento.
   ============================================================
 */
+/*
+  ============================================================
+  COMANDOS DE PRUEBA - STEP8F PLANT TRAVEL PLOTTER
+  ============================================================
 
+  Objetivo:
+    Graficar respuesta de planta para un PWM fijo.
+
+  Variables graficadas:
+    travel = recorrido realizado desde el inicio del movimiento
+    target = recorrido total requerido para llegar al setpoint
+
+  Lectura:
+    travel arranca en 0 y sube hacia target.
+    La pendiente de travel representa la velocidad angular aproximada.
+    Para comparar PWM, repetir el mismo movimiento con pwm_move distinto.
+
+  Importante:
+    Usar solo motion_mode=0 para identificación de planta.
+    Configurar con log_level=1.
+    Graficar con log_level=3.
+    En log_level=3 no salen ACK ni summaries para no ensuciar el Plotter.
+
+  Ver parametros:
+    {"log_level":1}
+    {"info":"all-params"}
+
+  Ensayo PWM 70:
+    {"log_level":1}
+    {"motion_mode":0}
+    {"pwm_move":70}
+    {"info":"all-params"}
+    {"log_level":3}
+    {"cmd":"go","pos":3}
+
+  Ensayo PWM 75:
+    {"log_level":1}
+    {"pwm_move":75}
+    {"info":"all-params"}
+    {"log_level":3}
+    {"cmd":"go","pos":1}
+
+  Ensayo PWM 80:
+    {"log_level":1}
+    {"pwm_move":80}
+    {"info":"all-params"}
+    {"log_level":3}
+    {"cmd":"go","pos":3}
+
+  Tiempo aproximado:
+    tiempo_ms = cantidad_de_muestras * PLANT_PLOT_PERIOD_MS
+
+  ============================================================
+*/
 // ============================================================
 // VERSION
 // ============================================================
 
-#define APP_VERSION "v3.1-continuous-silent-measured-config-json-door-motion-motor-sensor-log-step8A-motion-mode"
+#define APP_VERSION "v3.1-continuous-silent-measured-config-json-door-motion-motor-sensor-log-step8F-plant-travel-plotter"
 
 // ============================================================
 // PINES
@@ -118,6 +171,13 @@
 // Por defecto apagado para no cargar Serial.
 #define STREAM_PERIOD_MS 100UL
 
+// Plotter de planta/control.
+// En motion_mode=0:
+//   travel vs tiempo de muestra permite ver la respuesta de planta.
+//   tiempo aproximado = cantidad de muestras * PLANT_PLOT_PERIOD_MS.
+// Periodo desacoplado del periodo de control para no cargar Serial.
+#define PLANT_PLOT_PERIOD_MS 50UL
+
 // ============================================================
 // SENSOR / CONFIG / MOTION
 // ============================================================
@@ -156,6 +216,12 @@ unsigned long lastManualMoveMs = 0;
 
 // Stream
 unsigned long lastStreamMs = 0;
+
+// Plotter de planta
+unsigned long lastPlantPlotMs = 0;
+float plantPlotTargetDeg = 0.0f;
+float plantPlotStartAbsErrorDeg = 0.0f;
+uint16_t plantPlotPwmCmd = 0;
 
 bool isPositionActive() {
   return DoorMotion.is_active();
@@ -230,6 +296,36 @@ void printSensor() {
   );
 }
 
+void plantPlotIfNeeded() {
+  if (Config.get_log_level() != LOG_CTRL_ARDUINO_PLOTTER) {
+    return;
+  }
+
+  unsigned long nowMs = millis();
+
+  if (nowMs - lastPlantPlotMs < PLANT_PLOT_PERIOD_MS) {
+    return;
+  }
+
+  lastPlantPlotMs = nowMs;
+
+  // No se fuerza una lectura extra del AS5048A.
+  // DoorMotion.update() ya actualiza DoorSensor.deg() durante el movimiento.
+  float currentDeg = DoorSensor.deg();
+  float errorDeg = angleErrorDeg(currentDeg, plantPlotTargetDeg);
+  float absErrorDeg = fabs(errorDeg);
+
+  float travelDeg = plantPlotStartAbsErrorDeg - absErrorDeg;
+
+  if (travelDeg < 0.0f) {
+    travelDeg = 0.0f;
+  }
+
+  Log.plant_plot(
+    travelDeg,
+    plantPlotStartAbsErrorDeg
+  );
+}
 // ============================================================
 // MOTOR / DRV8833
 // ============================================================
@@ -288,7 +384,22 @@ void checkMotorTimeout() {
 // ============================================================
 
 void startDoorMotionTo(uint8_t pos, const char* targetName) {
-  if (DoorMotion.start(Config.get_pos_deg(pos), targetName)) {
+  float targetDeg = Config.get_pos_deg(pos);
+
+  if (DoorMotion.start(targetDeg, targetName)) {
+    plantPlotTargetDeg = targetDeg;
+
+    // DoorMotion.start() ya leyo el sensor mediante callback.
+    // Usamos el valor actual del wrapper para fijar el error inicial
+    // de la grafica relativa.
+    plantPlotStartAbsErrorDeg = fabs(angleErrorDeg(DoorSensor.deg(), plantPlotTargetDeg));
+
+    // Para identificacion de planta usar motion_mode=0.
+    // En ese modo pwm_cmd coincide con la entrada fija aplicada.
+    plantPlotPwmCmd = (uint16_t)Config.get_pwm_move();
+
+    lastPlantPlotMs = 0;
+
     deviceState = DEV_POSITIONING;
   }
 }
@@ -370,17 +481,21 @@ void setup() {
   motionCallbacks.stop_motor_output_only = stopMotorOutputOnly;
   DoorMotion.begin(&Config, motionCallbacks);
 
-  Serial.println();
-  Serial.print("BOOT OK - ");
-  Serial.println(APP_VERSION);
-  Log.msg(F("Host: JSON only. Ejemplo: {\"info\":\"all-params\"}"));
+  if (Config.get_log_level() != LOG_CTRL_ARDUINO_PLOTTER) {
+    Serial.println();
+    Serial.print("BOOT OK - ");
+    Serial.println(APP_VERSION);
+    Log.msg(F("Host: JSON only. Ejemplo: {\"info\":\"all-params\"}"));
+  }
 
   delay(200);
 
   readSensorDegMeasured(false);
-  printSensor();
 
-  Log.msg(F("Sistema listo. Stream apagado por defecto."));
+  if (Config.get_log_level() != LOG_CTRL_ARDUINO_PLOTTER) {
+    printSensor();
+    Log.msg(F("Sistema listo. Stream apagado por defecto."));
+  }
 }
 
 void loop() {
@@ -390,6 +505,7 @@ void loop() {
 
   if (DoorMotion.is_active()) {
     DoorMotion.update();
+    plantPlotIfNeeded();
 
     if (!DoorMotion.is_active() && deviceState == DEV_POSITIONING) {
       deviceState = DEV_IDLE;
