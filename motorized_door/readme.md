@@ -1,467 +1,352 @@
-# Step 8F - Identificación de planta con `travel` plotter
+# ESP32 Motorized Door Controller
 
-Versión validada:
+Control experimental de una puerta motorizada usando ESP32-S3, motor N20, driver DRV8833 y sensor absoluto AS5048A por SPI.
 
-```text
-v3.1-continuous-silent-measured-config-json-door-motion-motor-sensor-log-step8F-plant-travel-plotter
-```
-
-## Objetivo de la etapa
-
-Esta etapa tiene como objetivo levantar curvas reales de movimiento del sistema para identificar un modelo simple de planta antes de implementar un controlador PD/PID.
-
-El sistema físico utilizado es:
-
-```text
-ESP32-S3 + DRV8833 + motor N20 + AS5048A
-```
-
-La idea central es medir cómo responde la puerta ante un PWM fijo, usando la arquitectura modular ya validada, sin modificar todavía la lógica de control.
-
-El objetivo no es implementar PID en firmware en esta etapa, sino obtener datos experimentales para:
-
-```text
-1. Medir velocidad angular aproximada.
-2. Estimar relación PWM -> velocidad.
-3. Detectar zona muerta y problemas de arranque.
-4. Comparar comportamiento por sentido.
-5. Simular en Python un futuro control PD/PID.
-6. Obtener constantes iniciales conservadoras.
-```
+El objetivo del proyecto es evolucionar de forma conservadora desde un control simple por PWM fijo hacia una arquitectura modular no bloqueante, con máquina de estados y futura incorporación de control PD/PID de posición.
 
 ---
 
-## Principio de trabajo
+## Hardware
 
-El sistema actual funciona y se mantiene como baseline estable.
+- ESP32-S3 Dev Module
+- Driver DRV8833
+- Motor N20 DC con reductora
+- Sensor absoluto AS5048A por SPI
+- Fuente externa para motor
+- GND común entre lógica y potencia
 
-Por eso, en esta etapa se siguió el criterio:
+Conexiones principales usadas en la versión actual:
 
 ```text
-Cambios mínimos.
-Cambios conservadores.
-No tocar motor.
-No tocar sensor.
-No tocar FSM de posicionamiento.
-No tocar llegada, stall ni timeout.
-No implementar PID todavía.
-```
+DRV8833:
+STBY  -> GPIO4
+AIN2  -> GPIO16
+AIN1  -> GPIO17
 
-La instrumentación se limitó a generar una salida limpia para el Serial Plotter de Arduino.
+AS5048A SPI:
+CSn   -> GPIO10
+MOSI  -> GPIO11
+SCK   -> GPIO12
+MISO  -> GPIO13
+VDD   -> 5V0
+GND   -> GND
+
+Final de carrera:
+FC_L  -> GPIO14 INPUT_PULLUP
+```
 
 ---
 
 ## Arquitectura actual
 
-El firmware mantiene la separación de responsabilidades:
+La versión actual separa responsabilidades en módulos:
 
 ```text
 motorized_door.ino
-  Coordina el producto.
-  Mantiene DeviceState.
-  Crea e inyecta objetos físicos.
-  Procesa requests pendientes de Config.
-  Contiene Log.
-  No contiene lógica fina de movimiento.
+door_config.h / door_config.cpp
+door_motion.h / door_motion.cpp
+door_motor.h / door_motor.cpp
+door_angle_sensor.h / door_angle_sensor.cpp
+log.h / log.cpp
+```
 
-door_config
-  Protocolo JSON host.
-  Parámetros persistentes en NVS.
-  Requests pendientes.
-  No toca lógica física ni FSM de movimiento.
+Responsabilidades:
 
-door_motion
-  FSM de posicionamiento automático.
-  Llegada, cruce, stall, timeout, settle final, cancelación y summary.
-  Maneja la estrategia de movimiento según motion_mode.
-  No contiene Log.
+- `motorized_door.ino`: coordina el producto/dispositivo.
+- `door_config`: maneja JSON, NVS y requests pendientes.
+- `door_motion`: maneja la FSM de posicionamiento.
+- `door_motor`: encapsula DRV8833/PWM.
+- `door_angle_sensor`: encapsula lectura del AS5048A.
+- `log`: salida configurable de mensajes humanos / plotter / JSON.
 
-door_motor
-  Driver DRV8833 / PWM.
+El objeto `MagneticSensorAS5048A` y la inicialización SPI se mantienen en el `.ino` por decisión conservadora.
 
-door_angle_sensor
-  Wrapper conservador del AS5048A.
-  El objeto MagneticSensorAS5048A y la inicialización SPI siguen viviendo en el .ino.
+---
 
-log
-  Clog para mensajes humanos.
-  JSON sigue saliendo por Serial directo.
+## Versión actual validada
+
+```text
+v4.0-fsm-hold-ready-no-pid-from-step8F
+```
+
+Esta versión nace desde la baseline validada:
+
+```text
+v3.1-continuous-silent-measured-config-json-door-motion-motor-sensor-log-step8F-plant-travel-plotter
 ```
 
 ---
 
-## Instrumentación Step 8F
+## Objetivo de v4.0
 
-Para identificación de planta se usa únicamente:
+La v4.0 prepara la máquina de estados para un futuro modo de mantenimiento de posición, pero todavía no implementa PID ni mantenimiento físico.
+
+Se agrega conceptualmente el estado futuro:
 
 ```text
-motion_mode = 0
+HOLDING
 ```
 
-Es decir, PWM fijo en lazo abierto.
+Pero en esta versión no se entra todavía a `HOLDING`.
 
-El modo `motion_mode=1` queda como antecedente comparativo de Step 8A, pero no se usa para calcular constantes de planta porque introduce boost, zona lenta y perfil de acercamiento.
+El flujo real validado se mantiene igual:
+
+```text
+motion_mode=0:
+START -> MOVING -> SETTLING -> IDLE
+
+motion_mode=1:
+START -> MOVING -> SETTLING -> IDLE
+```
+
+La intención es dejar preparada la arquitectura para una futura versión:
+
+```text
+motion_mode=2:
+START -> MOVING -> SETTLING -> HOLDING
+```
+
+donde `HOLDING` sí tendrá sentido porque el PD/PID podrá leer posición, calcular error, decidir sentido y aplicar PWM continuamente.
 
 ---
 
-## Variables del Plotter
+## Modos de movimiento actuales
 
-La salida para el Serial Plotter se redujo intencionalmente a:
+### motion_mode = 0
 
-```text
-travel
-target
-```
+PWM fijo.
 
-Ejemplo:
+Usado como baseline funcional y para identificación de planta.
 
-```text
-travel:0.00    target:157.06
-travel:1.16    target:157.06
-travel:11.47   target:157.06
-travel:23.95   target:157.06
-...
-```
+### motion_mode = 1
 
-Significado:
+Approach no-PID.
 
-```text
-travel
-  Recorrido angular realizado desde el inicio del movimiento.
-
-target
-  Recorrido angular total necesario para llegar al objetivo.
-```
-
-Se evitó graficar:
-
-```text
-angle absoluto
-error firmado
-arrival_tol
-pwm_cmd
-```
-
-Motivo:
-
-```text
-angle absoluto
-  Confunde por el wrap 0/360 del sensor absoluto.
-
-error firmado
-  Ensucia la lectura principal para identificación de planta.
-
-arrival_tol y pwm_cmd
-  No son necesarios en el plotter principal.
-  El PWM queda registrado por el ensayo.
-```
-
----
-
-## Comandos base de ensayo
-
-Secuencia utilizada para configurar PWM fijo e iniciar una corrida:
-
-```json
-{"log_level":1}
-{"motion_mode":0}
-{"pwm_move":70}
-{"info":"all-params"}
-{"log_level":3}
-{"cmd":"go","pos":3}
-```
-
-Luego se repite cambiando PWM y posición destino:
-
-```json
-{"log_level":1}
-{"pwm_move":75}
-{"info":"all-params"}
-{"log_level":3}
-{"cmd":"go","pos":1}
-```
-
-```json
-{"log_level":1}
-{"pwm_move":80}
-{"info":"all-params"}
-{"log_level":3}
-{"cmd":"go","pos":3}
-```
-
-Para que el plotter quede limpio, conviene abrirlo o limpiarlo después de los comandos JSON de configuración y antes de iniciar el movimiento con `log_level=3`.
-
----
-
-## Ensayos levantados
-
-Se levantaron curvas con PWM fijo para recorridos cercanos entre POS_1 y POS_3.
-
-Posiciones calibradas:
-
-```text
-POS_1 = 2.29°
-POS_2 = 291.23°
-POS_3 = 206.06°
-```
-
-Recorridos principales:
-
-```text
-POS_1 -> POS_3
-POS_3 -> POS_1
-```
-
-Ambos recorridos están cerca de 157-160°, lo que permite comparar curvas de forma razonable.
-
----
-
-## Resultados experimentales
-
-Tabla resumen:
-
-| PWM | Sentido | Target aproximado | Velocidad útil | Delay de arranque | Resultado |
-|---:|---|---:|---:|---:|---|
-| 70 | POS_1 -> POS_3 | 156.97° | ~258 °/s | ~50 ms | Llega bien |
-| 70 | POS_3 -> POS_1 | 159.53° | ~258 °/s | ~950 ms | Llega, pero arranque marginal |
-| 75 | POS_1 -> POS_3 | 157.06° | ~282 °/s | ~50 ms | Llega bien |
-| 75 | POS_3 -> POS_1 | 159.53° | ~286 °/s | ~50 ms | Llega bien |
-| 80 | POS_1 -> POS_3 | 157.37° | ~307 °/s | ~50 ms | Llega bien |
-| 80 | POS_3 -> POS_1 | 159.50° | ~309 °/s | ~50 ms | Llega bien |
-
----
-
-## Observaciones principales
-
-Las curvas muestran que, una vez iniciado el movimiento, el crecimiento de `travel` es casi lineal.
-
-Esto permite modelar la planta, en primera aproximación, como:
-
-```text
-PWM fijo -> velocidad angular aproximadamente constante -> posición/travel
-```
-
-El comportamiento observado es compatible con un modelo simple:
-
-```text
-velocidad = Kv * (PWM - PWM_dead)
-```
-
----
-
-## Modelo estimado de planta
-
-Promediando ambos sentidos:
-
-```text
-PWM 70 -> ~258.4 °/s
-PWM 75 -> ~284.1 °/s
-PWM 80 -> ~308.1 °/s
-```
-
-Modelo lineal estimado:
-
-```text
-velocidad_deg_s ≈ 4.97 * (PWM - 18.0)
-```
-
-Constantes iniciales:
-
-```text
-Kv ≈ 4.97 °/s/PWM
-PWM_dead_dinámico ≈ 18
-```
-
-Separado por sentido:
-
-```text
-POS_1 -> POS_3:
-  velocidad ≈ 4.89 * (PWM - 17.2)
-
-POS_3 -> POS_1:
-  velocidad ≈ 5.06 * (PWM - 18.8)
-```
-
-La diferencia por sentido es baja para esta primera identificación, por lo que para la primera simulación se puede usar el modelo promedio.
-
----
-
-## Punto crítico detectado: arranque
-
-El dato más importante de la tanda es que PWM 70 no es marginal por velocidad una vez que el motor se mueve, pero sí puede ser marginal para iniciar el movimiento en cierto sentido.
-
-Caso observado:
-
-```text
-PWM 70, POS_3 -> POS_1:
-  delay de arranque ≈ 950 ms
-  velocidad una vez iniciado ≈ 258 °/s
-  llegada correcta
-```
-
-Esto separa dos fenómenos distintos:
-
-```text
-1. Velocidad en régimen:
-   Bastante lineal con el PWM.
-
-2. Arranque:
-   Puede depender de fricción estática, posición, carga, sentido y alimentación.
-```
-
-Conclusión:
-
-```text
-PWM 70 alcanza para mover una vez que el sistema despegó,
-pero puede quedar cerca del límite de arranque.
-```
-
-PWM 75 y PWM 80 arrancaron de forma mucho más confiable en los ensayos realizados.
-
----
-
-## Relación con Step 8A
-
-Step 8A había incorporado `motion_mode=1`, un perfil no-PID con:
+Modo comparativo con parámetros:
 
 ```text
 pwm_start
-pwm_move
 pwm_slow
 slow_zone_deg
 start_boost_ms
 ```
 
-Ese perfil mejoraba algunos casos de arranque y acercamiento, pero agregaba más parámetros empíricos.
+### motion_mode = 2
 
-Step 8F confirma experimentalmente por qué ese perfil ayudaba:
+Reservado para futura implementación PD/PID.
 
-```text
-El sistema puede necesitar más PWM al inicio para vencer fricción estática,
-pero no necesariamente necesita ese mismo PWM durante todo el recorrido.
-```
-
-Sin embargo, seguir agregando parámetros empíricos no es la solución definitiva. La identificación de planta permite avanzar hacia una estrategia más fundamentada.
+No está implementado en v4.0.
 
 ---
 
-## Implicancia para futuro PD/PID
+## Comandos JSON principales
 
-El futuro controlador no debería diseñarse a ciegas.
+Información:
 
-A partir de estas curvas, el modelo inicial de simulación puede ser:
-
-```text
-error = target - travel
-velocidad = d(travel) / dt
-PWM_control = Kp * error + Ki * integral - Kd * velocidad
+```json
+{"info":"version"}
+{"info":"all-params"}
 ```
 
-Para comenzar, conviene simular primero un PD:
+Movimiento:
 
-```text
-Ki = 0 inicialmente
+```json
+{"cmd":"go","pos":1}
+{"cmd":"go","pos":2}
+{"cmd":"go","pos":3}
+{"cmd":"stop"}
 ```
 
-La parte proporcional cumple un rol importante al inicio:
+Configuración:
 
-```text
-Cuando el error es grande, Kp * error tiende a pedir mucho PWM.
-En la práctica, esa salida se saturará al PWM máximo permitido.
-Esto ayuda a iniciar el movimiento y recorrer rápido hacia el objetivo.
+```json
+{"motion_mode":0}
+{"motion_mode":1}
+{"pwm_move":80}
+{"log_level":1}
 ```
 
-Cerca del setpoint, el error disminuye:
+Factory reset:
 
-```text
-La contribución proporcional baja.
-La parte derivativa puede ayudar a frenar según la velocidad.
-La parte integral, si se usa, debe entrar de forma moderada para compensar error residual,
-rozamiento o carga, y ayudar a mantenerse cerca del punto.
-```
-
-Es decir:
-
-```text
-P:
-  Empuja fuerte cuando el error es grande.
-  En arranque puede llevar la salida al máximo configurado.
-
-D:
-  Ayuda a frenar en función de la velocidad.
-  Puede reducir sobrepaso.
-
-I:
-  No debería usarse para forzar el arranque.
-  Sirve para corregir error residual y mantenerse cerca del punto.
-  Debe ser pequeña y controlada para evitar acumulación excesiva.
+```json
+{"cmd":"factory-reset"}
 ```
 
 ---
 
-## Criterio conservador para el próximo paso
+## Log levels
 
-No implementar PID todavía en firmware.
+El nivel de log se guarda en NVS.
 
-Secuencia recomendada:
+Valores usados:
 
 ```text
-1. Usar las curvas levantadas.
-2. Simular la planta en Python.
-3. Probar control PD con saturación de PWM.
-4. Agregar Ki solo si queda error estacionario relevante.
-5. Verificar sobrepaso, tiempo de llegada y estabilidad.
-6. Obtener constantes iniciales conservadoras.
-7. Recién después pensar implementación en firmware como motion_mode=2.
+log_level = 0  -> silencioso
+log_level = 1  -> mensajes humanos + JSON
+log_level = 3  -> modo plotter / salida reducida
+```
+
+Si el equipo parece no responder luego de una sesión de plotter, enviar:
+
+```json
+{"log_level":1}
+```
+
+Luego consultar:
+
+```json
+{"info":"version"}
 ```
 
 ---
 
-## Documentación generada
+## Validación v4.0
 
-Se generó un informe con curvas, tablas y conclusiones:
+La v4.0 fue probada con:
 
 ```text
-esp32_motorized_door_identificacion_planta_step8F.pdf
+ESP32-S3
+DRV8833
+Motor N20
+AS5048A
+pwm_move=80
+control_period_us=5000
 ```
 
-El informe incluye:
+### motion_mode=0
+
+Secuencia validada:
+
+```json
+{"motion_mode":0}
+{"cmd":"go","pos":2}
+{"cmd":"go","pos":3}
+{"cmd":"go","pos":1}
+```
+
+Resultados observados:
 
 ```text
-Curvas POS_1 -> POS_3.
-Curvas POS_3 -> POS_1.
-Comparación de todas las curvas.
-Delay de arranque.
-Modelo velocidad vs PWM.
-Tabla de identificación.
-Conclusiones para futura simulación PD/PID.
+POS_2 -> posicion_alcanzada
+POS_3 -> posicion_alcanzada
+POS_1 -> posicion_alcanzada
+stall_count=0/3
+```
+
+Tiempos aproximados:
+
+```text
+POS_2: 457 ms
+POS_3: 472 ms
+POS_1: 722 ms
+```
+
+También se validó:
+
+```text
+- Rechazo de nuevo go durante movimiento.
+- Stop durante movimiento.
+- Nuevo go después de stop.
+- Nuevo go después de llegada.
+```
+
+### motion_mode=1
+
+Secuencia validada:
+
+```json
+{"motion_mode":1}
+{"cmd":"go","pos":2}
+{"cmd":"go","pos":3}
+{"cmd":"go","pos":1}
+```
+
+Resultados observados:
+
+```text
+POS_2 -> posicion_alcanzada
+POS_3 -> posicion_alcanzada
+POS_1 -> posicion_alcanzada
+stall_count=0/3
+```
+
+Tiempos aproximados:
+
+```text
+POS_2: 452 ms
+POS_3: 477 ms
+POS_1: 722 ms
+```
+
+También se validó el rechazo de nuevo `go` durante movimiento:
+
+```text
+AUTO ocupado: solo se acepta stop para cancelar.
+```
+
+El movimiento original continúa hacia el target original, confirmando que no hay retarget durante `START/MOVING/SETTLING`.
+
+---
+
+## Criterio de aceptación v4.0
+
+La v4.0 queda aceptada porque:
+
+```text
+1. Compila.
+2. Carga correctamente en ESP32-S3.
+3. Responde version/all-params.
+4. motion_mode=0 conserva comportamiento validado.
+5. motion_mode=1 conserva comportamiento validado.
+6. Mientras se mueve, rechaza otro go.
+7. Mientras se mueve, acepta stop.
+8. Después de llegar, acepta otro go.
+9. No activa HOLDING todavía.
+10. No introduce PID ni parámetros PID.
 ```
 
 ---
 
-## Conclusión técnica
+## Nota sobre busy y ack
 
-Step 8F valida que el sistema puede identificarse con un modelo simple de velocidad en régimen:
+Actualmente, cuando llega un `go` durante movimiento, la capa JSON puede responder primero:
 
-```text
-velocidad_deg_s ≈ 4.97 * (PWM - 18.0)
+```json
+{"cmd":"go","pos":N,"result":"ack"}
 ```
 
-La planta se comporta de forma casi lineal para PWM fijo una vez iniciado el movimiento.
-
-La principal no linealidad observada no está en la velocidad de régimen, sino en el arranque:
+Luego la lógica de producto informa:
 
 ```text
-PWM 70 puede ser suficiente para moverse,
-pero no siempre es suficiente para despegar rápidamente.
+AUTO ocupado: solo se acepta stop para cancelar.
 ```
 
-Esto justifica avanzar hacia un control cerrado PD/PID, pero manteniendo una estrategia conservadora:
+El `ack` significa que el JSON fue recibido, no que el movimiento fue aceptado.
+
+En una versión futura podría mejorarse la semántica para responder algo como:
+
+```json
+{"cmd":"go","pos":N,"result":"busy"}
+```
+
+No se modifica en v4.0 para conservar la baseline.
+
+---
+
+## Próximo paso previsto
+
+La próxima evolución prevista es:
 
 ```text
-Primero simulación.
-Después constantes iniciales.
-Después implementación controlada en firmware.
+v4.1-motion-mode-2-pd-position-control
 ```
 
-El proyecto queda preparado para explicar de forma práctica por qué un sistema real con motor, carga, inercia, rozamiento y sensor absoluto de posición necesita pasar de PWM empírico a identificación de planta y control cerrado.
+Objetivo:
+
+- Agregar `motion_mode=2`.
+- Implementar primero PD, con `Ki=0`.
+- Controlar posición en lazo cerrado.
+- Decidir sentido y PWM en cada muestra.
+- Permitir mantenimiento de posición en `HOLDING`.
+- Permitir retarget desde el host en modo PID.
+- Mantener `motion_mode=0` y `motion_mode=1` sin alterar comportamiento.

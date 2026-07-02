@@ -75,8 +75,8 @@ bool CDoorMotion::start(float requestedTargetDeg, const char* requestedTargetNam
     return false;
   }
 
-  if (is_active()) {
-    Serial.println("POSITION FSM activa. Solo se acepta stop para cancelar.");
+  if (is_busy()) {
+    Serial.println("POSITION FSM ocupada. Solo se acepta stop para cancelar.");
     return false;
   }
 
@@ -106,6 +106,11 @@ void CDoorMotion::update()
       complete_settling_if_ready();
       break;
 
+    case DOOR_MOTION_HOLDING:
+      // Reservado para futuro motion_mode=2 con control cerrado de posicion.
+      // En v4.0 ningun modo entra a este estado.
+      break;
+
     case DOOR_MOTION_IDLE:
     default:
       break;
@@ -127,12 +132,26 @@ void CDoorMotion::cancel(const char* reason)
     float currentDeg = read_sensor(false);
     float errorDeg = angle_error_deg(currentDeg, targetDeg);
     cancel_now(reason, currentDeg, errorDeg);
+    return;
+  }
+
+  if (state == DOOR_MOTION_HOLDING) {
+    cb.stop_motor_output_only();
+    direction = DOOR_MOTION_DIR_NONE;
+    state = DOOR_MOTION_IDLE;
   }
 }
 
 bool CDoorMotion::is_active() const
 {
   return state != DOOR_MOTION_IDLE;
+}
+
+bool CDoorMotion::is_busy() const
+{
+  return state == DOOR_MOTION_START ||
+         state == DOOR_MOTION_MOVING ||
+         state == DOOR_MOTION_SETTLING;
 }
 
 bool CDoorMotion::is_moving_or_starting() const
@@ -143,6 +162,11 @@ bool CDoorMotion::is_moving_or_starting() const
 bool CDoorMotion::is_settling() const
 {
   return state == DOOR_MOTION_SETTLING;
+}
+
+bool CDoorMotion::is_holding() const
+{
+  return state == DOOR_MOTION_HOLDING;
 }
 
 void CDoorMotion::set_debug(bool enabled)
@@ -166,6 +190,9 @@ const char* CDoorMotion::state_name() const
 
     case DOOR_MOTION_SETTLING:
       return "SETTLING";
+
+    case DOOR_MOTION_HOLDING:
+      return "HOLDING";
 
     case DOOR_MOTION_IDLE:
     default:
@@ -441,6 +468,10 @@ void CDoorMotion::complete_settling_if_ready()
   print_summary(finishReason, finalDeg, finalError);
 
   direction = DOOR_MOTION_DIR_NONE;
+
+  // v4.0: HOLDING queda preparado, pero todavia no se activa.
+  // motion_mode=0 y motion_mode=1 conservan el flujo validado:
+  // START -> MOVING -> SETTLING -> IDLE.
   state = DOOR_MOTION_IDLE;
 }
 

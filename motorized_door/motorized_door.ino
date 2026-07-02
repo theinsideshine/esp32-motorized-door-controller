@@ -17,7 +17,7 @@
 /*
   ============================================================
   PROYECTO: ESP32 MOTORIZED DOOR CONTROLLER
-  VERSION: v3.1-continuous-silent-measured-config-json-door-motion-motor-sensor-log-step8E-travel-error-plotter
+  VERSION: v4.0-fsm-hold-ready-no-pid-from-step8F
 
   OBJETIVO DE ESTA VERSION
   ------------------------------------------------------------
@@ -64,6 +64,11 @@
     PID:
       - todavia NO implementado.
       - cuando entre, pertenece al bloque de movimiento/posicionamiento.
+
+    v4.0:
+      - prepara la FSM para un futuro estado HOLDING.
+      - HOLDING queda reservado para motion_mode=2 con PD/PID.
+      - motion_mode=0 y motion_mode=1 mantienen el flujo validado.
   ============================================================
 */
 /*
@@ -124,7 +129,7 @@
 // VERSION
 // ============================================================
 
-#define APP_VERSION "v3.1-continuous-silent-measured-config-json-door-motion-motor-sensor-log-step8F-plant-travel-plotter"
+#define APP_VERSION "v4.0-fsm-hold-ready-no-pid-from-step8F"
 
 // ============================================================
 // PINES
@@ -412,8 +417,8 @@ void processHostRequest() {
   DoorHostRequest req = Config.get_request();
   Config.clear_request();
 
-  if (isPositionActive() && req != DOOR_REQ_STOP) {
-    Log.msg(F("AUTO activo: solo se acepta stop para cancelar."));
+  if (DoorMotion.is_busy() && req != DOOR_REQ_STOP) {
+    Log.msg(F("AUTO ocupado: solo se acepta stop para cancelar."));
     return;
   }
 
@@ -424,6 +429,10 @@ void processHostRequest() {
       } else if (DoorMotion.is_settling()) {
         // Ya se corto el motor y se esta esperando la lectura final estable.
         // No se cambia el reason original.
+      } else if (DoorMotion.is_holding()) {
+        // Reservado para futuro motion_mode=2: stop libera el mantenimiento.
+        DoorMotion.cancel("hold_liberado_por_host");
+        stopMotorOnly();
       } else {
         stopMotorOnly();
       }

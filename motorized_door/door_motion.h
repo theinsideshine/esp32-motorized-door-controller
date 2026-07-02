@@ -12,6 +12,7 @@
   Responsabilidad:
     - Movimiento/posicionamiento automatico hacia un setpoint.
     - Maquina interna de posicionamiento: idle/start/moving/settling.
+    - Estado HOLDING reservado para futuro control cerrado de posicion.
     - Criterios de llegada, cruce, stall, timeout y cancelacion.
     - Summary final del movimiento automatico.
 
@@ -23,6 +24,7 @@
     - Usa callbacks a funciones fisicas ya validadas en el main.
     - Mantiene modo fixed PWM como baseline y permite perfil
       approach no-PID configurable. PID todavia NO entra en esta version.
+    - HOLDING queda preparado, pero no se usa hasta motion_mode=2.
   ============================================================
 */
 
@@ -38,7 +40,8 @@ enum DoorMotionState : uint8_t {
   DOOR_MOTION_IDLE = 0,
   DOOR_MOTION_START,
   DOOR_MOTION_MOVING,
-  DOOR_MOTION_SETTLING
+  DOOR_MOTION_SETTLING,
+  DOOR_MOTION_HOLDING
 };
 
 struct DoorMotionCallbacks {
@@ -61,8 +64,10 @@ public:
   void cancel(const char* reason);
 
   bool is_active() const;
+  bool is_busy() const;
   bool is_moving_or_starting() const;
   bool is_settling() const;
+  bool is_holding() const;
 
   void set_debug(bool enabled);
   bool get_debug() const;
