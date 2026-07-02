@@ -71,6 +71,17 @@
 #define DOOR_SLOW_ZONE_DEG_DEFAULT             20.0f
 #define DOOR_START_BOOST_MS_DEFAULT            120UL
 
+// Parametros reservados para futuro motion_mode=2.
+// v4.1a solo agrega configuracion persistente; no activa PID.
+#define DOOR_PID_KP_DEFAULT                    0.70f
+#define DOOR_PID_KI_DEFAULT                    0.00f
+#define DOOR_PID_KD_DEFAULT                    0.05f
+#define DOOR_PID_PWM_MAX_DEFAULT               80UL
+#define DOOR_PID_PWM_MIN_EFFECTIVE_DEFAULT     55UL
+#define DOOR_PID_MIN_EFFECTIVE_ERROR_DEFAULT   6.0f
+#define DOOR_PID_I_ACTIVE_ERROR_DEFAULT        35.0f
+#define DOOR_PID_INTEGRAL_LIMIT_DEFAULT        120.0f
+
 // ============================================================
 // MODO / PEDIDOS HOST
 // ============================================================
@@ -114,6 +125,14 @@ public:
       {"pwm_slow":60}
       {"slow_zone_deg":20}
       {"start_boost_ms":120}
+      {"pid_kp":0.70}
+      {"pid_ki":0.00}
+      {"pid_kd":0.05}
+      {"pid_pwm_max":80}
+      {"pid_pwm_min_effective":55}
+      {"pid_min_effective_error_deg":6}
+      {"pid_i_active_error_deg":35}
+      {"pid_integral_limit":120}
   */
   void host_cmd();
 
@@ -133,6 +152,15 @@ public:
   uint32_t get_pwm_slow() const;
   float get_slow_zone_deg() const;
   uint32_t get_start_boost_ms() const;
+
+  float get_pid_kp() const;
+  float get_pid_ki() const;
+  float get_pid_kd() const;
+  uint32_t get_pid_pwm_max() const;
+  uint32_t get_pid_pwm_min_effective() const;
+  float get_pid_min_effective_error_deg() const;
+  float get_pid_i_active_error_deg() const;
+  float get_pid_integral_limit() const;
 
   uint32_t get_control_period_us() const;
 
@@ -162,6 +190,15 @@ public:
   void set_pwm_slow(uint32_t value);
   void set_slow_zone_deg(float value);
   void set_start_boost_ms(uint32_t value);
+
+  void set_pid_kp(float value);
+  void set_pid_ki(float value);
+  void set_pid_kd(float value);
+  void set_pid_pwm_max(uint32_t value);
+  void set_pid_pwm_min_effective(uint32_t value);
+  void set_pid_min_effective_error_deg(float value);
+  void set_pid_i_active_error_deg(float value);
+  void set_pid_integral_limit(float value);
 
   void set_control_period_us(uint32_t value);
 
@@ -209,6 +246,15 @@ private:
   uint32_t pwm_slow;
   float slow_zone_deg;
   uint32_t start_boost_ms;
+
+  float pid_kp;
+  float pid_ki;
+  float pid_kd;
+  uint32_t pid_pwm_max;
+  uint32_t pid_pwm_min_effective;
+  float pid_min_effective_error_deg;
+  float pid_i_active_error_deg;
+  float pid_integral_limit;
 
   uint32_t control_period_us;
 

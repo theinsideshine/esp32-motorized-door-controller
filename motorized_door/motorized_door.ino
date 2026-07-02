@@ -17,7 +17,7 @@
 /*
   ============================================================
   PROYECTO: ESP32 MOTORIZED DOOR CONTROLLER
-  VERSION: v4.0-fsm-hold-ready-no-pid-from-step8F
+  VERSION: v4.1a-pd-config-ready-no-control
 
   OBJETIVO DE ESTA VERSION
   ------------------------------------------------------------
@@ -129,7 +129,7 @@
 // VERSION
 // ============================================================
 
-#define APP_VERSION "v4.0-fsm-hold-ready-no-pid-from-step8F"
+#define APP_VERSION "v4.1a-pd-config-ready-no-control"
 
 // ============================================================
 // PINES

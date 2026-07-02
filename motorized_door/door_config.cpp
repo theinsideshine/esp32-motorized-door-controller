@@ -66,6 +66,15 @@ void CDoorConfig::load_defaults()
   slow_zone_deg = DOOR_SLOW_ZONE_DEG_DEFAULT;
   start_boost_ms = DOOR_START_BOOST_MS_DEFAULT;
 
+  pid_kp = DOOR_PID_KP_DEFAULT;
+  pid_ki = DOOR_PID_KI_DEFAULT;
+  pid_kd = DOOR_PID_KD_DEFAULT;
+  pid_pwm_max = DOOR_PID_PWM_MAX_DEFAULT;
+  pid_pwm_min_effective = DOOR_PID_PWM_MIN_EFFECTIVE_DEFAULT;
+  pid_min_effective_error_deg = DOOR_PID_MIN_EFFECTIVE_ERROR_DEFAULT;
+  pid_i_active_error_deg = DOOR_PID_I_ACTIVE_ERROR_DEFAULT;
+  pid_integral_limit = DOOR_PID_INTEGRAL_LIMIT_DEFAULT;
+
   control_period_us = DOOR_CONTROL_PERIOD_US_DEFAULT;
 
   auto_tolerance_deg = DOOR_AUTO_TOLERANCE_DEG_DEFAULT;
@@ -97,6 +106,15 @@ bool CDoorConfig::load_from_nvs()
   pwm_slow = clamp_pwm(prefs.getUInt("pwmslow", DOOR_PWM_SLOW_DEFAULT));
   slow_zone_deg = prefs.getFloat("slowzone", DOOR_SLOW_ZONE_DEG_DEFAULT);
   start_boost_ms = prefs.getUInt("boostms", DOOR_START_BOOST_MS_DEFAULT);
+
+  pid_kp = prefs.getFloat("pidkp", DOOR_PID_KP_DEFAULT);
+  pid_ki = prefs.getFloat("pidki", DOOR_PID_KI_DEFAULT);
+  pid_kd = prefs.getFloat("pidkd", DOOR_PID_KD_DEFAULT);
+  pid_pwm_max = clamp_pwm(prefs.getUInt("pidpmax", DOOR_PID_PWM_MAX_DEFAULT));
+  pid_pwm_min_effective = clamp_pwm(prefs.getUInt("pidpmin", DOOR_PID_PWM_MIN_EFFECTIVE_DEFAULT));
+  pid_min_effective_error_deg = prefs.getFloat("pidmine", DOOR_PID_MIN_EFFECTIVE_ERROR_DEFAULT);
+  pid_i_active_error_deg = prefs.getFloat("pidiact", DOOR_PID_I_ACTIVE_ERROR_DEFAULT);
+  pid_integral_limit = prefs.getFloat("pidilim", DOOR_PID_INTEGRAL_LIMIT_DEFAULT);
 
   control_period_us = prefs.getUInt("period", DOOR_CONTROL_PERIOD_US_DEFAULT);
 
@@ -139,6 +157,30 @@ bool CDoorConfig::load_from_nvs()
     slow_zone_deg = DOOR_SLOW_ZONE_DEG_DEFAULT;
   }
 
+  if (!valid_float(pid_kp) || pid_kp < 0.0f) {
+    pid_kp = DOOR_PID_KP_DEFAULT;
+  }
+
+  if (!valid_float(pid_ki) || pid_ki < 0.0f) {
+    pid_ki = DOOR_PID_KI_DEFAULT;
+  }
+
+  if (!valid_float(pid_kd) || pid_kd < 0.0f) {
+    pid_kd = DOOR_PID_KD_DEFAULT;
+  }
+
+  if (!valid_float(pid_min_effective_error_deg) || pid_min_effective_error_deg < 0.0f) {
+    pid_min_effective_error_deg = DOOR_PID_MIN_EFFECTIVE_ERROR_DEFAULT;
+  }
+
+  if (!valid_float(pid_i_active_error_deg) || pid_i_active_error_deg < 0.0f) {
+    pid_i_active_error_deg = DOOR_PID_I_ACTIVE_ERROR_DEFAULT;
+  }
+
+  if (!valid_float(pid_integral_limit) || pid_integral_limit < 0.0f) {
+    pid_integral_limit = DOOR_PID_INTEGRAL_LIMIT_DEFAULT;
+  }
+
   if (control_period_us == 0) {
     control_period_us = DOOR_CONTROL_PERIOD_US_DEFAULT;
   }
@@ -178,6 +220,15 @@ void CDoorConfig::save_all()
   prefs.putUInt("pwmslow", pwm_slow);
   prefs.putFloat("slowzone", slow_zone_deg);
   prefs.putUInt("boostms", start_boost_ms);
+
+  prefs.putFloat("pidkp", pid_kp);
+  prefs.putFloat("pidki", pid_ki);
+  prefs.putFloat("pidkd", pid_kd);
+  prefs.putUInt("pidpmax", pid_pwm_max);
+  prefs.putUInt("pidpmin", pid_pwm_min_effective);
+  prefs.putFloat("pidmine", pid_min_effective_error_deg);
+  prefs.putFloat("pidiact", pid_i_active_error_deg);
+  prefs.putFloat("pidilim", pid_integral_limit);
 
   prefs.putUInt("period", control_period_us);
 
@@ -257,6 +308,46 @@ float CDoorConfig::get_slow_zone_deg() const
 uint32_t CDoorConfig::get_start_boost_ms() const
 {
   return start_boost_ms;
+}
+
+float CDoorConfig::get_pid_kp() const
+{
+  return pid_kp;
+}
+
+float CDoorConfig::get_pid_ki() const
+{
+  return pid_ki;
+}
+
+float CDoorConfig::get_pid_kd() const
+{
+  return pid_kd;
+}
+
+uint32_t CDoorConfig::get_pid_pwm_max() const
+{
+  return pid_pwm_max;
+}
+
+uint32_t CDoorConfig::get_pid_pwm_min_effective() const
+{
+  return pid_pwm_min_effective;
+}
+
+float CDoorConfig::get_pid_min_effective_error_deg() const
+{
+  return pid_min_effective_error_deg;
+}
+
+float CDoorConfig::get_pid_i_active_error_deg() const
+{
+  return pid_i_active_error_deg;
+}
+
+float CDoorConfig::get_pid_integral_limit() const
+{
+  return pid_integral_limit;
 }
 
 uint32_t CDoorConfig::get_control_period_us() const
@@ -407,6 +498,102 @@ void CDoorConfig::set_start_boost_ms(uint32_t value)
 
   if (nvs_ready) {
     prefs.putUInt("boostms", start_boost_ms);
+  }
+}
+
+void CDoorConfig::set_pid_kp(float value)
+{
+  if (!valid_float(value) || value < 0.0f) {
+    return;
+  }
+
+  pid_kp = value;
+
+  if (nvs_ready) {
+    prefs.putFloat("pidkp", pid_kp);
+  }
+}
+
+void CDoorConfig::set_pid_ki(float value)
+{
+  if (!valid_float(value) || value < 0.0f) {
+    return;
+  }
+
+  pid_ki = value;
+
+  if (nvs_ready) {
+    prefs.putFloat("pidki", pid_ki);
+  }
+}
+
+void CDoorConfig::set_pid_kd(float value)
+{
+  if (!valid_float(value) || value < 0.0f) {
+    return;
+  }
+
+  pid_kd = value;
+
+  if (nvs_ready) {
+    prefs.putFloat("pidkd", pid_kd);
+  }
+}
+
+void CDoorConfig::set_pid_pwm_max(uint32_t value)
+{
+  pid_pwm_max = clamp_pwm(value);
+
+  if (nvs_ready) {
+    prefs.putUInt("pidpmax", pid_pwm_max);
+  }
+}
+
+void CDoorConfig::set_pid_pwm_min_effective(uint32_t value)
+{
+  pid_pwm_min_effective = clamp_pwm(value);
+
+  if (nvs_ready) {
+    prefs.putUInt("pidpmin", pid_pwm_min_effective);
+  }
+}
+
+void CDoorConfig::set_pid_min_effective_error_deg(float value)
+{
+  if (!valid_float(value) || value < 0.0f) {
+    return;
+  }
+
+  pid_min_effective_error_deg = value;
+
+  if (nvs_ready) {
+    prefs.putFloat("pidmine", pid_min_effective_error_deg);
+  }
+}
+
+void CDoorConfig::set_pid_i_active_error_deg(float value)
+{
+  if (!valid_float(value) || value < 0.0f) {
+    return;
+  }
+
+  pid_i_active_error_deg = value;
+
+  if (nvs_ready) {
+    prefs.putFloat("pidiact", pid_i_active_error_deg);
+  }
+}
+
+void CDoorConfig::set_pid_integral_limit(float value)
+{
+  if (!valid_float(value) || value < 0.0f) {
+    return;
+  }
+
+  pid_integral_limit = value;
+
+  if (nvs_ready) {
+    prefs.putFloat("pidilim", pid_integral_limit);
   }
 }
 
@@ -671,6 +858,54 @@ void CDoorConfig::process_json(JsonDocument& doc)
     known_key = true;
   }
 
+  if (doc.containsKey("pid_kp")) {
+    set_pid_kp(doc["pid_kp"].as<float>());
+    doc["pid_kp"] = pid_kp;
+    known_key = true;
+  }
+
+  if (doc.containsKey("pid_ki")) {
+    set_pid_ki(doc["pid_ki"].as<float>());
+    doc["pid_ki"] = pid_ki;
+    known_key = true;
+  }
+
+  if (doc.containsKey("pid_kd")) {
+    set_pid_kd(doc["pid_kd"].as<float>());
+    doc["pid_kd"] = pid_kd;
+    known_key = true;
+  }
+
+  if (doc.containsKey("pid_pwm_max")) {
+    set_pid_pwm_max(doc["pid_pwm_max"].as<uint32_t>());
+    doc["pid_pwm_max"] = pid_pwm_max;
+    known_key = true;
+  }
+
+  if (doc.containsKey("pid_pwm_min_effective")) {
+    set_pid_pwm_min_effective(doc["pid_pwm_min_effective"].as<uint32_t>());
+    doc["pid_pwm_min_effective"] = pid_pwm_min_effective;
+    known_key = true;
+  }
+
+  if (doc.containsKey("pid_min_effective_error_deg")) {
+    set_pid_min_effective_error_deg(doc["pid_min_effective_error_deg"].as<float>());
+    doc["pid_min_effective_error_deg"] = pid_min_effective_error_deg;
+    known_key = true;
+  }
+
+  if (doc.containsKey("pid_i_active_error_deg")) {
+    set_pid_i_active_error_deg(doc["pid_i_active_error_deg"].as<float>());
+    doc["pid_i_active_error_deg"] = pid_i_active_error_deg;
+    known_key = true;
+  }
+
+  if (doc.containsKey("pid_integral_limit")) {
+    set_pid_integral_limit(doc["pid_integral_limit"].as<float>());
+    doc["pid_integral_limit"] = pid_integral_limit;
+    known_key = true;
+  }
+
   if (doc.containsKey("control_period_us")) {
     set_control_period_us(doc["control_period_us"].as<uint32_t>());
     doc["control_period_us"] = control_period_us;
@@ -814,7 +1049,7 @@ void CDoorConfig::process_json(JsonDocument& doc)
 
 void CDoorConfig::send_all_params()
 {
-  StaticJsonDocument<1024> doc;
+  StaticJsonDocument<1536> doc;
 
   doc["info"] = "all-params";
   doc["result"] = "ok";
@@ -834,6 +1069,15 @@ void CDoorConfig::send_all_params()
   doc["pwm_slow"] = pwm_slow;
   doc["slow_zone_deg"] = slow_zone_deg;
   doc["start_boost_ms"] = start_boost_ms;
+
+  doc["pid_kp"] = pid_kp;
+  doc["pid_ki"] = pid_ki;
+  doc["pid_kd"] = pid_kd;
+  doc["pid_pwm_max"] = pid_pwm_max;
+  doc["pid_pwm_min_effective"] = pid_pwm_min_effective;
+  doc["pid_min_effective_error_deg"] = pid_min_effective_error_deg;
+  doc["pid_i_active_error_deg"] = pid_i_active_error_deg;
+  doc["pid_integral_limit"] = pid_integral_limit;
 
   doc["control_period_us"] = control_period_us;
 
