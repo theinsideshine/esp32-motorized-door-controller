@@ -1238,6 +1238,10 @@ uint32_t CDoorConfig::sanitize_motion_mode(uint32_t value) const
     return DOOR_MOTION_MODE_APPROACH;
   }
 
+  if (value == DOOR_MOTION_MODE_PD_POSITION) {
+    return DOOR_MOTION_MODE_PD_POSITION;
+  }
+
   return DOOR_MOTION_MODE_FIXED_PWM;
 }
 

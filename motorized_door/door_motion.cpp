@@ -43,6 +43,13 @@ CDoorMotion::CDoorMotion()
 
   activePwm = 0;
 
+  pdLastDeg = 0.0f;
+  pdVelocityDegS = 0.0f;
+  pdTermP = 0.0f;
+  pdTermI = 0.0f;
+  pdTermD = 0.0f;
+  pdCommand = 0.0f;
+
   cb.read_sensor_deg = nullptr;
   cb.get_last_sensor_read_us = nullptr;
   cb.is_fc_l_active = nullptr;
@@ -107,8 +114,8 @@ void CDoorMotion::update()
       break;
 
     case DOOR_MOTION_HOLDING:
-      // Reservado para futuro motion_mode=2 con control cerrado de posicion.
-      // En v4.0 ningun modo entra a este estado.
+      // Reservado para futura etapa con mantenimiento de posicion.
+      // En v4.1b motion_mode=2 llega y corta; todavia no entra en HOLDING.
       break;
 
     case DOOR_MOTION_IDLE:
@@ -314,9 +321,86 @@ uint8_t CDoorMotion::compute_motion_pwm(float absErrorDeg) const
   return (uint8_t)cfg->get_pwm_move();
 }
 
+uint8_t CDoorMotion::compute_pd_pwm(float errorDeg, float velocityDegS, DoorMotionDirection& desiredDirection)
+{
+  desiredDirection = DOOR_MOTION_DIR_NONE;
+
+  if (cfg == nullptr) {
+    pdTermP = 0.0f;
+    pdTermI = 0.0f;
+    pdTermD = 0.0f;
+    pdCommand = 0.0f;
+    return 0;
+  }
+
+  // angle_error_deg() usa error = current - target.
+  // Para el PD usamos error de control = target - current, por eso se invierte el signo.
+  float controlErrorDeg = -errorDeg;
+
+  pdTermP = cfg->get_pid_kp() * controlErrorDeg;
+
+  // v4.1b: Ki queda configurado y persistido, pero no se usa todavia.
+  // La integral se habilitara recien cuando el PD este validado y pasemos a HOLDING.
+  pdTermI = 0.0f;
+
+  // Derivada sobre velocidad medida/estimada para evitar golpe derivativo por cambio de setpoint.
+  pdTermD = -cfg->get_pid_kd() * velocityDegS;
+
+  pdCommand = pdTermP + pdTermI + pdTermD;
+
+  if (pdCommand > 0.0f) {
+    desiredDirection = DOOR_MOTION_DIR_LEFT;   // sube angulo
+  } else if (pdCommand < 0.0f) {
+    desiredDirection = DOOR_MOTION_DIR_RIGHT;  // baja angulo
+  } else {
+    return 0;
+  }
+
+  float pwmFloat = fabs(pdCommand);
+  float absErrorDeg = fabs(errorDeg);
+
+  if (pwmFloat > (float)cfg->get_pid_pwm_max()) {
+    pwmFloat = (float)cfg->get_pid_pwm_max();
+  }
+
+  // Lejos del target se eleva al PWM minimo efectivo para vencer friccion.
+  // Cerca del target no se fuerza minimo para no producir sobrepaso innecesario.
+  if (absErrorDeg > cfg->get_pid_min_effective_error_deg() &&
+      pwmFloat > 0.0f &&
+      pwmFloat < (float)cfg->get_pid_pwm_min_effective()) {
+    pwmFloat = (float)cfg->get_pid_pwm_min_effective();
+  }
+
+  if (pwmFloat < 0.5f) {
+    return 0;
+  }
+
+  return (uint8_t)(pwmFloat + 0.5f);
+}
+
 void CDoorMotion::apply_motion_pwm(uint8_t pwm)
 {
   activePwm = pwm;
+
+  if (direction == DOOR_MOTION_DIR_RIGHT) {
+    cb.motor_right_continuous(activePwm);
+    return;
+  }
+
+  if (direction == DOOR_MOTION_DIR_LEFT) {
+    cb.motor_left_continuous(activePwm);
+  }
+}
+
+void CDoorMotion::apply_pd_output(DoorMotionDirection desiredDirection, uint8_t pwm)
+{
+  direction = desiredDirection;
+  activePwm = pwm;
+
+  if (direction == DOOR_MOTION_DIR_NONE || activePwm == 0) {
+    cb.stop_motor_output_only();
+    return;
+  }
 
   if (direction == DOOR_MOTION_DIR_RIGHT) {
     cb.motor_right_continuous(activePwm);
@@ -384,6 +468,32 @@ void CDoorMotion::print_summary(const char* reason, float finalDeg, float finalE
 
     Serial.print("start_boost_ms=");
     Serial.println(cfg->get_start_boost_ms());
+  }
+
+  if (cfg->get_motion_mode() == DOOR_MOTION_MODE_PD_POSITION) {
+    Serial.print("pid_kp=");
+    Serial.println(cfg->get_pid_kp(), 4);
+
+    Serial.print("pid_ki_used=");
+    Serial.println(0.0f, 4);
+
+    Serial.print("pid_kd=");
+    Serial.println(cfg->get_pid_kd(), 4);
+
+    Serial.print("pid_pwm_max=");
+    Serial.println(cfg->get_pid_pwm_max());
+
+    Serial.print("pid_pwm_min_effective=");
+    Serial.println(cfg->get_pid_pwm_min_effective());
+
+    Serial.print("pid_min_effective_error_deg=");
+    Serial.println(cfg->get_pid_min_effective_error_deg(), 2);
+
+    Serial.print("pd_last_velocity_deg_s=");
+    Serial.println(pdVelocityDegS, 2);
+
+    Serial.print("pd_last_u=");
+    Serial.println(pdCommand, 2);
   }
 
   Serial.print("direction=");
@@ -469,9 +579,8 @@ void CDoorMotion::complete_settling_if_ready()
 
   direction = DOOR_MOTION_DIR_NONE;
 
-  // v4.0: HOLDING queda preparado, pero todavia no se activa.
-  // motion_mode=0 y motion_mode=1 conservan el flujo validado:
-  // START -> MOVING -> SETTLING -> IDLE.
+  // v4.1b: incluso en motion_mode=2 el flujo sigue siendo llegar y cortar.
+  // HOLDING queda preparado para la proxima etapa, pero todavia no se activa.
   state = DOOR_MOTION_IDLE;
 }
 
@@ -500,14 +609,34 @@ void CDoorMotion::start_step()
 
   activePwm = 0;
 
+  pdLastDeg = startDeg;
+  pdVelocityDegS = 0.0f;
+  pdTermP = 0.0f;
+  pdTermI = 0.0f;
+  pdTermD = 0.0f;
+  pdCommand = 0.0f;
+
   reset_stats();
 
   float absStartErrorDeg = fabs(startErrorDeg);
-  uint8_t startPwm = compute_motion_pwm(absStartErrorDeg);
+  uint8_t startPwm = 0;
+  DoorMotionDirection startDirection = DOOR_MOTION_DIR_NONE;
+
+  if (cfg->get_motion_mode() == DOOR_MOTION_MODE_PD_POSITION) {
+    startPwm = compute_pd_pwm(startErrorDeg, 0.0f, startDirection);
+  } else {
+    startPwm = compute_motion_pwm(absStartErrorDeg);
+  }
 
   if (cfg->get_log_level() != DOOR_LOG_LEVEL_PLOTTER) {
     Serial.println();
-    Serial.print("AUTO START CONTINUO SILENCIOSO -> ");
+
+    if (cfg->get_motion_mode() == DOOR_MOTION_MODE_PD_POSITION) {
+      Serial.print("AUTO START PD POSITION -> ");
+    } else {
+      Serial.print("AUTO START CONTINUO SILENCIOSO -> ");
+    }
+
     Serial.print(targetName);
     Serial.print("  current=");
     Serial.print(startDeg, 2);
@@ -529,7 +658,19 @@ void CDoorMotion::start_step()
     return;
   }
 
-  if (startErrorDeg > 0.0f) {
+  if (cfg->get_motion_mode() == DOOR_MOTION_MODE_PD_POSITION) {
+    if (cfg->get_log_level() != DOOR_LOG_LEVEL_PLOTTER) {
+      if (startDirection == DOOR_MOTION_DIR_RIGHT) {
+        Serial.println("AUTO DIR: RIGHT / REWIND logico / baja angulo");
+      } else if (startDirection == DOOR_MOTION_DIR_LEFT) {
+        Serial.println("AUTO DIR: LEFT / FORWARD logico / sube angulo");
+      } else {
+        Serial.println("AUTO DIR: NONE / PD sin salida inicial");
+      }
+    }
+
+    apply_pd_output(startDirection, startPwm);
+  } else if (startErrorDeg > 0.0f) {
     // current > target: bajar angulo
     direction = DOOR_MOTION_DIR_RIGHT;
 
@@ -557,8 +698,9 @@ void CDoorMotion::start_step()
 void CDoorMotion::moving_step()
 {
   uint32_t nowUs = micros();
+  uint32_t dtUs = nowUs - lastControlUs;
 
-  if ((uint32_t)(nowUs - lastControlUs) < cfg->get_control_period_us()) {
+  if (dtUs < cfg->get_control_period_us()) {
     return;
   }
 
@@ -567,6 +709,12 @@ void CDoorMotion::moving_step()
   uint32_t controlStartUs = micros();
 
   register_sample_timing(nowUs);
+
+  float dtSec = (float)dtUs / 1000000.0f;
+
+  if (dtSec <= 0.0f || dtSec > 0.5f) {
+    dtSec = (float)cfg->get_control_period_us() / 1000000.0f;
+  }
 
   float currentDeg = read_sensor(true);
   float errorDeg = angle_error_deg(currentDeg, targetDeg);
@@ -591,23 +739,36 @@ void CDoorMotion::moving_step()
     return;
   }
 
-  // Si cruce el objetivo, corto.
-  // RIGHT baja angulo: el error deberia pasar de positivo a negativo.
-  if (direction == DOOR_MOTION_DIR_RIGHT && errorDeg < -cfg->get_auto_cross_margin_deg()) {
-    finish_now("objetivo_cruzado", currentDeg, errorDeg);
-    return;
-  }
+  if (cfg->get_motion_mode() == DOOR_MOTION_MODE_PD_POSITION) {
+    float deltaDeg = angle_error_deg(currentDeg, pdLastDeg);
+    pdVelocityDegS = deltaDeg / dtSec;
+    pdLastDeg = currentDeg;
 
-  // LEFT sube angulo: el error deberia pasar de negativo a positivo.
-  if (direction == DOOR_MOTION_DIR_LEFT && errorDeg > cfg->get_auto_cross_margin_deg()) {
-    finish_now("objetivo_cruzado", currentDeg, errorDeg);
-    return;
-  }
+    DoorMotionDirection desiredDirection = DOOR_MOTION_DIR_NONE;
+    uint8_t desiredPwm = compute_pd_pwm(errorDeg, pdVelocityDegS, desiredDirection);
 
-  uint8_t desiredPwm = compute_motion_pwm(absErrorDeg);
+    if (desiredDirection != direction || desiredPwm != activePwm) {
+      apply_pd_output(desiredDirection, desiredPwm);
+    }
+  } else {
+    // Si cruce el objetivo, corto.
+    // RIGHT baja angulo: el error deberia pasar de positivo a negativo.
+    if (direction == DOOR_MOTION_DIR_RIGHT && errorDeg < -cfg->get_auto_cross_margin_deg()) {
+      finish_now("objetivo_cruzado", currentDeg, errorDeg);
+      return;
+    }
 
-  if (desiredPwm != activePwm) {
-    apply_motion_pwm(desiredPwm);
+    // LEFT sube angulo: el error deberia pasar de negativo a positivo.
+    if (direction == DOOR_MOTION_DIR_LEFT && errorDeg > cfg->get_auto_cross_margin_deg()) {
+      finish_now("objetivo_cruzado", currentDeg, errorDeg);
+      return;
+    }
+
+    uint8_t desiredPwm = compute_motion_pwm(absErrorDeg);
+
+    if (desiredPwm != activePwm) {
+      apply_motion_pwm(desiredPwm);
+    }
   }
 
   // Deteccion de sin movimiento.
@@ -650,7 +811,16 @@ void CDoorMotion::moving_step()
     Serial.print(" pwm=");
     Serial.print(activePwm);
     Serial.print(" mode=");
-    Serial.println(cfg->get_motion_mode());
+    Serial.print(cfg->get_motion_mode());
+
+    if (cfg->get_motion_mode() == DOOR_MOTION_MODE_PD_POSITION) {
+      Serial.print(" vel_deg_s=");
+      Serial.print(pdVelocityDegS, 2);
+      Serial.print(" u=");
+      Serial.print(pdCommand, 2);
+    }
+
+    Serial.println();
   }
 
   uint32_t controlUs = micros() - controlStartUs;
@@ -659,4 +829,3 @@ void CDoorMotion::moving_step()
     maxControlUs = controlUs;
   }
 }
-

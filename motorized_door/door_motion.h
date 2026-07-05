@@ -22,9 +22,10 @@
     - NO conoce pines.
     - NO crea clases de motor ni sensor.
     - Usa callbacks a funciones fisicas ya validadas en el main.
-    - Mantiene modo fixed PWM como baseline y permite perfil
-      approach no-PID configurable. PID todavia NO entra en esta version.
-    - HOLDING queda preparado, pero no se usa hasta motion_mode=2.
+    - Mantiene modo fixed PWM como baseline y perfil approach no-PID.
+    - Agrega motion_mode=2 con PD de posicion para llegar y cortar.
+    - Ki queda preparado por configuracion, pero no se usa en v4.1b.
+    - HOLDING queda preparado, pero todavia no se activa.
   ============================================================
 */
 
@@ -122,13 +123,22 @@ private:
 
   uint8_t activePwm;
 
+  float pdLastDeg;
+  float pdVelocityDegS;
+  float pdTermP;
+  float pdTermI;
+  float pdTermD;
+  float pdCommand;
+
   void reset_stats();
   void register_sample_timing(uint32_t nowUs);
 
   float read_sensor(bool countForMotionStats);
 
   uint8_t compute_motion_pwm(float absErrorDeg) const;
+  uint8_t compute_pd_pwm(float errorDeg, float velocityDegS, DoorMotionDirection& desiredDirection);
   void apply_motion_pwm(uint8_t pwm);
+  void apply_pd_output(DoorMotionDirection desiredDirection, uint8_t pwm);
 
   void start_step();
   void moving_step();

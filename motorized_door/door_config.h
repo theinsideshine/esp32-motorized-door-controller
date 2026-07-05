@@ -60,10 +60,13 @@
 
 #define DOOR_LOG_LEVEL_DEFAULT              DOOR_LOG_LEVEL_MSG
 
-// Movimiento: modo 0 mantiene baseline fixed PWM.
-// Modo 1 agrega perfil no-PID de aproximacion.
+// Movimiento:
+//   0 = baseline fixed PWM.
+//   1 = perfil no-PID de aproximacion.
+//   2 = PD de posicion, Ki todavia sin uso, sin HOLDING real.
 #define DOOR_MOTION_MODE_FIXED_PWM             0UL
 #define DOOR_MOTION_MODE_APPROACH              1UL
+#define DOOR_MOTION_MODE_PD_POSITION           2UL
 #define DOOR_MOTION_MODE_DEFAULT               DOOR_MOTION_MODE_FIXED_PWM
 
 #define DOOR_PWM_START_DEFAULT                 80UL

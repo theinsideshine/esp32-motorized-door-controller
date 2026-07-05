@@ -17,7 +17,7 @@
 /*
   ============================================================
   PROYECTO: ESP32 MOTORIZED DOOR CONTROLLER
-  VERSION: v4.1a-pd-config-ready-no-control
+  VERSION: v4.1b-motion-mode-2-pd-moving
 
   OBJETIVO DE ESTA VERSION
   ------------------------------------------------------------
@@ -61,14 +61,15 @@
       - lectura angular rad/deg
       - velocidad y tiempo sensor_us
 
-    PID:
-      - todavia NO implementado.
-      - cuando entre, pertenece al bloque de movimiento/posicionamiento.
+    PD/PID:
+      - v4.1b habilita motion_mode=2 con PD de posicion.
+      - Ki queda preparado por configuracion, pero no se usa todavia.
+      - HOLDING sigue reservado para una version posterior.
 
-    v4.0:
-      - prepara la FSM para un futuro estado HOLDING.
-      - HOLDING queda reservado para motion_mode=2 con PD/PID.
+    v4.1b:
       - motion_mode=0 y motion_mode=1 mantienen el flujo validado.
+      - motion_mode=2 usa PD para llegar a posicion y cortar.
+      - HOLDING queda reservado; todavia no se mantiene posicion.
   ============================================================
 */
 /*
@@ -129,7 +130,7 @@
 // VERSION
 // ============================================================
 
-#define APP_VERSION "v4.1a-pd-config-ready-no-control"
+#define APP_VERSION "v4.1b-motion-mode-2-pd-moving"
 
 // ============================================================
 // PINES
