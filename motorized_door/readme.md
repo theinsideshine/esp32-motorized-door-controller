@@ -468,9 +468,9 @@ El proyecto queda preparado para explicar de forma práctica por qué un sistema
 
 ---
 
-## Validación prevista v4.1b
+## Validación prevista v4.1c
 
-La v4.1b habilita `motion_mode=2` con PD de posición para llegar a la posición y cortar.
+La v4.1c habilita `motion_mode=2` con PID de posición para llegar a la posición y cortar, todavía sin HOLDING real.
 
 Flujo real:
 
@@ -480,17 +480,20 @@ START -> MOVING -> SETTLING -> IDLE
 
 Todavía no hay mantenimiento de posición en `HOLDING`.
 
-Parámetros usados por el PD:
+Parámetros usados por el PID:
 
 ```text
 pid_kp
+pid_ki
 pid_kd
 pid_pwm_max
 pid_pwm_min_effective
 pid_min_effective_error_deg
+pid_i_active_error_deg
+pid_integral_limit
 ```
 
-`pid_ki`, `pid_i_active_error_deg` y `pid_integral_limit` quedan configurados y persistidos, pero la integral no se usa en v4.1b.
+En v4.1c la integral se usa solo durante `MOVING`, con acumulador limitado y zona activa.
 
 Prueba mínima:
 
@@ -506,8 +509,29 @@ Criterio de aceptación:
 
 ```text
 1. motion_mode=2 queda activo.
-2. El motor decide sentido y PWM por PD.
+2. El motor decide sentido y PWM por PID.
 3. Llega a las posiciones y corta.
 4. No entra en HOLDING.
 5. motion_mode=0 y motion_mode=1 siguen funcionando igual.
 ```
+
+
+---
+
+## Nota v4.1c
+
+La v4.1c agrega la parte integral al `motion_mode=2`, pero mantiene el flujo conservador:
+
+```text
+START -> MOVING -> SETTLING -> IDLE
+```
+
+Todavía no se activa `HOLDING`.
+
+La integral se implementa como acumulador de cuentas normalizado al período de control. Se limita con `pid_integral_limit` y solo se activa si:
+
+```text
+auto_tolerance_deg < abs(error) <= pid_i_active_error_deg
+```
+
+Fuera de esa zona se reinicia para evitar memoria integral vieja.

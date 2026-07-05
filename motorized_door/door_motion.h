@@ -23,8 +23,8 @@
     - NO crea clases de motor ni sensor.
     - Usa callbacks a funciones fisicas ya validadas en el main.
     - Mantiene modo fixed PWM como baseline y perfil approach no-PID.
-    - Agrega motion_mode=2 con PD de posicion para llegar y cortar.
-    - Ki queda preparado por configuracion, pero no se usa en v4.1b.
+    - Agrega motion_mode=2 con PID de posicion para llegar y cortar.
+    - La integral se usa solo en movimiento, con limite y zona activa.
     - HOLDING queda preparado, pero todavia no se activa.
   ============================================================
 */
@@ -129,6 +129,7 @@ private:
   float pdTermI;
   float pdTermD;
   float pdCommand;
+  float pidIntegralAccum;
 
   void reset_stats();
   void register_sample_timing(uint32_t nowUs);
@@ -136,7 +137,7 @@ private:
   float read_sensor(bool countForMotionStats);
 
   uint8_t compute_motion_pwm(float absErrorDeg) const;
-  uint8_t compute_pd_pwm(float errorDeg, float velocityDegS, DoorMotionDirection& desiredDirection);
+  uint8_t compute_pid_pwm(float errorDeg, float velocityDegS, float dtSec, DoorMotionDirection& desiredDirection);
   void apply_motion_pwm(uint8_t pwm);
   void apply_pd_output(DoorMotionDirection desiredDirection, uint8_t pwm);
 

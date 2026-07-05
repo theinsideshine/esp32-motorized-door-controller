@@ -49,6 +49,7 @@ CDoorMotion::CDoorMotion()
   pdTermI = 0.0f;
   pdTermD = 0.0f;
   pdCommand = 0.0f;
+  pidIntegralAccum = 0.0f;
 
   cb.read_sensor_deg = nullptr;
   cb.get_last_sensor_read_us = nullptr;
@@ -115,7 +116,7 @@ void CDoorMotion::update()
 
     case DOOR_MOTION_HOLDING:
       // Reservado para futura etapa con mantenimiento de posicion.
-      // En v4.1b motion_mode=2 llega y corta; todavia no entra en HOLDING.
+      // En v4.1c motion_mode=2 llega y corta; todavia no entra en HOLDING.
       break;
 
     case DOOR_MOTION_IDLE:
@@ -321,7 +322,7 @@ uint8_t CDoorMotion::compute_motion_pwm(float absErrorDeg) const
   return (uint8_t)cfg->get_pwm_move();
 }
 
-uint8_t CDoorMotion::compute_pd_pwm(float errorDeg, float velocityDegS, DoorMotionDirection& desiredDirection)
+uint8_t CDoorMotion::compute_pid_pwm(float errorDeg, float velocityDegS, float dtSec, DoorMotionDirection& desiredDirection)
 {
   desiredDirection = DOOR_MOTION_DIR_NONE;
 
@@ -330,18 +331,64 @@ uint8_t CDoorMotion::compute_pd_pwm(float errorDeg, float velocityDegS, DoorMoti
     pdTermI = 0.0f;
     pdTermD = 0.0f;
     pdCommand = 0.0f;
+    pidIntegralAccum = 0.0f;
     return 0;
   }
 
   // angle_error_deg() usa error = current - target.
-  // Para el PD usamos error de control = target - current, por eso se invierte el signo.
+  // Para el PID usamos error de control = target - current, por eso se invierte el signo.
   float controlErrorDeg = -errorDeg;
+  float absErrorDeg = fabs(errorDeg);
 
   pdTermP = cfg->get_pid_kp() * controlErrorDeg;
 
-  // v4.1b: Ki queda configurado y persistido, pero no se usa todavia.
-  // La integral se habilitara recien cuando el PD este validado y pasemos a HOLDING.
-  pdTermI = 0.0f;
+  // Integral tipo contador, normalizada al periodo de control configurado.
+  // Esto replica la idea clasica de "cuentas" integrales en un lazo discreto,
+  // pero evita que una pausa larga de loop infle demasiado la I.
+  bool integralActive = cfg->get_pid_ki() > 0.0f &&
+                        absErrorDeg > cfg->get_auto_tolerance_deg() &&
+                        absErrorDeg <= cfg->get_pid_i_active_error_deg() &&
+                        dtSec > 0.0f;
+
+  if (integralActive) {
+    float nominalDtSec = (float)cfg->get_control_period_us() / 1000000.0f;
+
+    if (nominalDtSec <= 0.0f) {
+      nominalDtSec = 0.005f;
+    }
+
+    float sampleScale = dtSec / nominalDtSec;
+
+    if (sampleScale < 0.2f) {
+      sampleScale = 0.2f;
+    }
+
+    if (sampleScale > 3.0f) {
+      sampleScale = 3.0f;
+    }
+
+    pidIntegralAccum += controlErrorDeg * sampleScale;
+
+    float integralLimit = cfg->get_pid_integral_limit();
+
+    if (integralLimit < 0.0f) {
+      integralLimit = 0.0f;
+    }
+
+    if (pidIntegralAccum > integralLimit) {
+      pidIntegralAccum = integralLimit;
+    }
+
+    if (pidIntegralAccum < -integralLimit) {
+      pidIntegralAccum = -integralLimit;
+    }
+  } else {
+    // Fuera de la zona activa no dejamos memoria integral vieja.
+    // Esto evita que un movimiento largo llegue al target con I acumulada desde lejos.
+    pidIntegralAccum = 0.0f;
+  }
+
+  pdTermI = cfg->get_pid_ki() * pidIntegralAccum;
 
   // Derivada sobre velocidad medida/estimada para evitar golpe derivativo por cambio de setpoint.
   pdTermD = -cfg->get_pid_kd() * velocityDegS;
@@ -357,14 +404,13 @@ uint8_t CDoorMotion::compute_pd_pwm(float errorDeg, float velocityDegS, DoorMoti
   }
 
   float pwmFloat = fabs(pdCommand);
-  float absErrorDeg = fabs(errorDeg);
 
   if (pwmFloat > (float)cfg->get_pid_pwm_max()) {
     pwmFloat = (float)cfg->get_pid_pwm_max();
   }
 
   // Lejos del target se eleva al PWM minimo efectivo para vencer friccion.
-  // Cerca del target no se fuerza minimo para no producir sobrepaso innecesario.
+  // Cerca del target no se fuerza minimo: ahi debe actuar la integral limitada.
   if (absErrorDeg > cfg->get_pid_min_effective_error_deg() &&
       pwmFloat > 0.0f &&
       pwmFloat < (float)cfg->get_pid_pwm_min_effective()) {
@@ -475,7 +521,7 @@ void CDoorMotion::print_summary(const char* reason, float finalDeg, float finalE
     Serial.println(cfg->get_pid_kp(), 4);
 
     Serial.print("pid_ki_used=");
-    Serial.println(0.0f, 4);
+    Serial.println(cfg->get_pid_ki(), 4);
 
     Serial.print("pid_kd=");
     Serial.println(cfg->get_pid_kd(), 4);
@@ -488,6 +534,18 @@ void CDoorMotion::print_summary(const char* reason, float finalDeg, float finalE
 
     Serial.print("pid_min_effective_error_deg=");
     Serial.println(cfg->get_pid_min_effective_error_deg(), 2);
+
+    Serial.print("pid_i_active_error_deg=");
+    Serial.println(cfg->get_pid_i_active_error_deg(), 2);
+
+    Serial.print("pid_integral_limit=");
+    Serial.println(cfg->get_pid_integral_limit(), 2);
+
+    Serial.print("pid_integral_accum=");
+    Serial.println(pidIntegralAccum, 2);
+
+    Serial.print("pid_term_i=");
+    Serial.println(pdTermI, 2);
 
     Serial.print("pd_last_velocity_deg_s=");
     Serial.println(pdVelocityDegS, 2);
@@ -579,7 +637,7 @@ void CDoorMotion::complete_settling_if_ready()
 
   direction = DOOR_MOTION_DIR_NONE;
 
-  // v4.1b: incluso en motion_mode=2 el flujo sigue siendo llegar y cortar.
+  // v4.1c: incluso en motion_mode=2 el flujo sigue siendo llegar y cortar.
   // HOLDING queda preparado para la proxima etapa, pero todavia no se activa.
   state = DOOR_MOTION_IDLE;
 }
@@ -615,6 +673,7 @@ void CDoorMotion::start_step()
   pdTermI = 0.0f;
   pdTermD = 0.0f;
   pdCommand = 0.0f;
+  pidIntegralAccum = 0.0f;
 
   reset_stats();
 
@@ -623,7 +682,7 @@ void CDoorMotion::start_step()
   DoorMotionDirection startDirection = DOOR_MOTION_DIR_NONE;
 
   if (cfg->get_motion_mode() == DOOR_MOTION_MODE_PD_POSITION) {
-    startPwm = compute_pd_pwm(startErrorDeg, 0.0f, startDirection);
+    startPwm = compute_pid_pwm(startErrorDeg, 0.0f, 0.0f, startDirection);
   } else {
     startPwm = compute_motion_pwm(absStartErrorDeg);
   }
@@ -632,7 +691,7 @@ void CDoorMotion::start_step()
     Serial.println();
 
     if (cfg->get_motion_mode() == DOOR_MOTION_MODE_PD_POSITION) {
-      Serial.print("AUTO START PD POSITION -> ");
+      Serial.print("AUTO START PID POSITION -> ");
     } else {
       Serial.print("AUTO START CONTINUO SILENCIOSO -> ");
     }
@@ -745,7 +804,7 @@ void CDoorMotion::moving_step()
     pdLastDeg = currentDeg;
 
     DoorMotionDirection desiredDirection = DOOR_MOTION_DIR_NONE;
-    uint8_t desiredPwm = compute_pd_pwm(errorDeg, pdVelocityDegS, desiredDirection);
+    uint8_t desiredPwm = compute_pid_pwm(errorDeg, pdVelocityDegS, dtSec, desiredDirection);
 
     if (desiredDirection != direction || desiredPwm != activePwm) {
       apply_pd_output(desiredDirection, desiredPwm);
@@ -818,6 +877,8 @@ void CDoorMotion::moving_step()
       Serial.print(pdVelocityDegS, 2);
       Serial.print(" u=");
       Serial.print(pdCommand, 2);
+      Serial.print(" i_acc=");
+      Serial.print(pidIntegralAccum, 2);
     }
 
     Serial.println();

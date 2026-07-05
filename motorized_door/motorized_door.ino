@@ -17,7 +17,7 @@
 /*
   ============================================================
   PROYECTO: ESP32 MOTORIZED DOOR CONTROLLER
-  VERSION: v4.1b-motion-mode-2-pd-moving
+  VERSION: v4.1c-pid-moving-no-hold
 
   OBJETIVO DE ESTA VERSION
   ------------------------------------------------------------
@@ -62,13 +62,13 @@
       - velocidad y tiempo sensor_us
 
     PD/PID:
-      - v4.1b habilita motion_mode=2 con PD de posicion.
-      - Ki queda preparado por configuracion, pero no se usa todavia.
+      - v4.1c habilita motion_mode=2 con PID de posicion.
+      - Ki se usa en movimiento con acumulador limitado.
       - HOLDING sigue reservado para una version posterior.
 
-    v4.1b:
+    v4.1c:
       - motion_mode=0 y motion_mode=1 mantienen el flujo validado.
-      - motion_mode=2 usa PD para llegar a posicion y cortar.
+      - motion_mode=2 usa PID para llegar a posicion y cortar.
       - HOLDING queda reservado; todavia no se mantiene posicion.
   ============================================================
 */
@@ -130,7 +130,7 @@
 // VERSION
 // ============================================================
 
-#define APP_VERSION "v4.1b-motion-mode-2-pd-moving"
+#define APP_VERSION "v4.1c-pid-moving-no-hold"
 
 // ============================================================
 // PINES
