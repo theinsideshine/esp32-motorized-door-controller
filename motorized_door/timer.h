@@ -27,14 +27,15 @@ public:
   CTimer();
 
   void start(void);
+  void start_ms_ago(uint32_t ms);
   void start_us_ago(uint32_t us);
 
-  bool expired(uint32_t ms);
-  bool expired_ms(uint32_t ms);
-  bool expired_us(uint32_t us);
+  bool expired(uint32_t ms) const;
+  bool expired_ms(uint32_t ms) const;
+  bool expired_us(uint32_t us) const;
 
-  uint32_t elapsed_ms(void);
-  uint32_t elapsed_us(void);
+  uint32_t elapsed_ms(void) const;
+  uint32_t elapsed_us(void) const;
 
 private:
   uint32_t timerMs;

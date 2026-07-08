@@ -21,18 +21,13 @@ CDoorMotion::CDoorMotion()
   decisionDeg = 0.0f;
   decisionErrorDeg = 0.0f;
 
-  startMs = 0;
-  lastStallCheckMs = 0;
-  lastDebugMs = 0;
-  settleStartMs = 0;
-
   lastStallDeg = 0.0f;
   stallCount = 0;
 
   finishReason = "ninguna";
   finishWasCancel = false;
 
-  lastSampleUs = 0;
+  sampleTimingStarted = false;
 
   samples = 0;
   minSampleDtUs = 0xFFFFFFFF;
@@ -258,7 +253,7 @@ float CDoorMotion::angle_distance_deg(float aDeg, float bDeg)
 void CDoorMotion::reset_stats()
 {
   controlTimer.start();
-  lastSampleUs = 0;
+  sampleTimingStarted = false;
 
   samples = 0;
   minSampleDtUs = 0xFFFFFFFF;
@@ -267,21 +262,20 @@ void CDoorMotion::reset_stats()
   maxControlUs = 0;
 }
 
-void CDoorMotion::register_sample_timing(uint32_t nowUs)
+void CDoorMotion::register_sample_timing(uint32_t dtUs)
 {
-  if (lastSampleUs != 0) {
-    uint32_t dt = nowUs - lastSampleUs;
-
-    if (dt < minSampleDtUs) {
-      minSampleDtUs = dt;
+  if (sampleTimingStarted) {
+    if (dtUs < minSampleDtUs) {
+      minSampleDtUs = dtUs;
     }
 
-    if (dt > maxSampleDtUs) {
-      maxSampleDtUs = dt;
+    if (dtUs > maxSampleDtUs) {
+      maxSampleDtUs = dtUs;
     }
+  } else {
+    sampleTimingStarted = true;
   }
 
-  lastSampleUs = nowUs;
   samples++;
 }
 
@@ -307,7 +301,7 @@ uint8_t CDoorMotion::compute_motion_pwm(float absErrorDeg) const
   }
 
   if (cfg->get_motion_mode() == DOOR_MOTION_MODE_APPROACH) {
-    unsigned long elapsedMs = millis() - startMs;
+    uint32_t elapsedMs = runTimer.elapsed_ms();
 
     if (elapsedMs < cfg->get_start_boost_ms()) {
       return (uint8_t)cfg->get_pwm_start();
@@ -463,7 +457,7 @@ void CDoorMotion::print_summary(const char* reason, float finalDeg, float finalE
     return;
   }
 
-  unsigned long runMs = millis() - startMs;
+  uint32_t runMs = runTimer.elapsed_ms();
 
   Serial.println();
   Serial.println("========== AUTO SUMMARY ==========");
@@ -600,7 +594,7 @@ void CDoorMotion::enter_settling(const char* reason, bool wasCancel, float curre
 
   cb.stop_motor_output_only();
 
-  settleStartMs = millis();
+  settleTimer.start();
   state = DOOR_MOTION_SETTLING;
 }
 
@@ -620,7 +614,7 @@ void CDoorMotion::complete_settling_if_ready()
     return;
   }
 
-  if (millis() - settleStartMs < cfg->get_auto_final_settle_ms()) {
+  if (!settleTimer.expired_ms(cfg->get_auto_final_settle_ms())) {
     return;
   }
 
@@ -654,9 +648,9 @@ void CDoorMotion::start_step()
   decisionDeg = startDeg;
   decisionErrorDeg = startErrorDeg;
 
-  startMs = millis();
-  lastStallCheckMs = millis();
-  lastDebugMs = millis();
+  runTimer.start();
+  stallTimer.start();
+  debugTimer.start();
 
   lastStallDeg = startDeg;
   stallCount = 0;
@@ -755,18 +749,16 @@ void CDoorMotion::start_step()
 
 void CDoorMotion::moving_step()
 {
-  
   if (!controlTimer.expired_us(cfg->get_control_period_us())) {
     return;
   }
 
-  uint32_t nowUs = micros();
   uint32_t dtUs = controlTimer.elapsed_us();
   controlTimer.start();
 
-  uint32_t controlStartUs = micros();
+  CTimer controlExecTimer;
 
-  register_sample_timing(nowUs);
+  register_sample_timing(dtUs);
 
   float dtSec = (float)dtUs / 1000000.0f;
 
@@ -786,7 +778,7 @@ void CDoorMotion::moving_step()
     return;
   }
 
-  if (millis() - startMs >= cfg->get_auto_max_run_ms()) {
+  if (runTimer.expired_ms(cfg->get_auto_max_run_ms())) {
     cancel_now("tiempo_maximo_alcanzado", currentDeg, errorDeg);
     return;
   }
@@ -830,7 +822,7 @@ void CDoorMotion::moving_step()
   }
 
   // Deteccion de sin movimiento.
-  if (millis() - lastStallCheckMs >= cfg->get_auto_stall_check_ms()) {
+  if (stallTimer.expired_ms(cfg->get_auto_stall_check_ms())) {
     float movedDeg = angle_distance_deg(currentDeg, lastStallDeg);
 
     if (movedDeg < cfg->get_auto_min_move_deg()) {
@@ -840,7 +832,7 @@ void CDoorMotion::moving_step()
     }
 
     lastStallDeg = currentDeg;
-    lastStallCheckMs = millis();
+    stallTimer.start();
 
     if (stallCount >= cfg->get_auto_stall_max_count()) {
       cancel_now("sin_movimiento_detectado", currentDeg, errorDeg);
@@ -851,8 +843,8 @@ void CDoorMotion::moving_step()
   // Debug compacto opcional. Por defecto apagado.
   if (debugAuto &&
       cfg->get_log_level() != DOOR_LOG_LEVEL_PLOTTER &&
-      millis() - lastDebugMs >= DOOR_MOTION_DEBUG_PERIOD_MS) {
-    lastDebugMs = millis();
+      debugTimer.expired_ms(DOOR_MOTION_DEBUG_PERIOD_MS)) {
+    debugTimer.start();
 
     Serial.print("AUTO ");
     Serial.print(targetName);
@@ -883,7 +875,7 @@ void CDoorMotion::moving_step()
     Serial.println();
   }
 
-  uint32_t controlUs = micros() - controlStartUs;
+  uint32_t controlUs = controlExecTimer.elapsed_us();
 
   if (controlUs > maxControlUs) {
     maxControlUs = controlUs;

@@ -12,12 +12,13 @@
 #include "door_motion.h"
 #include "door_motor.h"
 #include "door_angle_sensor.h"
+#include "timer.h"
 #include "log.h"
 
 /*
   ============================================================
   PROYECTO: ESP32 MOTORIZED DOOR CONTROLLER
-  VERSION: v4.1c-pid-moving-no-hold
+  VERSION: v5.0b-timer-model
 
   OBJETIVO DE ESTA VERSION
   ------------------------------------------------------------
@@ -130,7 +131,7 @@
 // VERSION
 // ============================================================
 
-#define APP_VERSION "v5.0a-timer-abstraction"
+#define APP_VERSION "v5.0b-timer-model"
 
 // ============================================================
 // PINES
@@ -218,13 +219,13 @@ DeviceState deviceState = DEV_IDLE;
 bool streamEnabled = false;
 
 // Manual
-unsigned long lastManualMoveMs = 0;
+CTimer manualMoveTimer;
 
 // Stream
-unsigned long lastStreamMs = 0;
+CTimer streamTimer;
 
 // Plotter de planta
-unsigned long lastPlantPlotMs = 0;
+CTimer plantPlotTimer;
 float plantPlotTargetDeg = 0.0f;
 float plantPlotStartAbsErrorDeg = 0.0f;
 uint16_t plantPlotPwmCmd = 0;
@@ -307,13 +308,11 @@ void plantPlotIfNeeded() {
     return;
   }
 
-  unsigned long nowMs = millis();
-
-  if (nowMs - lastPlantPlotMs < PLANT_PLOT_PERIOD_MS) {
+  if (!plantPlotTimer.expired_ms(PLANT_PLOT_PERIOD_MS)) {
     return;
   }
 
-  lastPlantPlotMs = nowMs;
+  plantPlotTimer.start();
 
   // No se fuerza una lectura extra del AS5048A.
   // DoorMotion.update() ya actualiza DoorSensor.deg() durante el movimiento.
@@ -357,14 +356,14 @@ void commandRightManual() {
   Log.msg(F("CMD MOTOR RIGHT MANUAL"));
   deviceState = DEV_MANUAL_MOVING;
   motorRightContinuous((uint8_t)Config.get_pwm_move());
-  lastManualMoveMs = millis();
+  manualMoveTimer.start();
 }
 
 void commandLeftManual() {
   Log.msg(F("CMD MOTOR LEFT MANUAL"));
   deviceState = DEV_MANUAL_MOVING;
   motorLeftContinuous((uint8_t)Config.get_pwm_move());
-  lastManualMoveMs = millis();
+  manualMoveTimer.start();
 }
 
 void checkMotorTimeout() {
@@ -376,7 +375,7 @@ void checkMotorTimeout() {
     return;
   }
 
-  if (millis() - lastManualMoveMs >= TIMEOUT_MANUAL_MS) {
+  if (manualMoveTimer.expired_ms(TIMEOUT_MANUAL_MS)) {
     Log.msg(F("AUTO STOP por timeout manual"));
     stopMotorOnly();
 
@@ -404,7 +403,7 @@ void startDoorMotionTo(uint8_t pos, const char* targetName) {
     // En ese modo pwm_cmd coincide con la entrada fija aplicada.
     plantPlotPwmCmd = (uint16_t)Config.get_pwm_move();
 
-    lastPlantPlotMs = 0;
+    plantPlotTimer.start_ms_ago(PLANT_PLOT_PERIOD_MS);
 
     deviceState = DEV_POSITIONING;
   }
@@ -530,8 +529,8 @@ void loop() {
 
   checkMotorTimeout();
 
-  if (streamEnabled && millis() - lastStreamMs >= STREAM_PERIOD_MS) {
-    lastStreamMs = millis();
+  if (streamEnabled && streamTimer.expired_ms(STREAM_PERIOD_MS)) {
+    streamTimer.start();
 
     readSensorDegMeasured(false);
     printSensor();

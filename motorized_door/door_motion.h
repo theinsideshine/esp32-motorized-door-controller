@@ -102,19 +102,19 @@ private:
   float decisionDeg;
   float decisionErrorDeg;
 
-  unsigned long startMs;
-  unsigned long lastStallCheckMs;
-  unsigned long lastDebugMs;
-  unsigned long settleStartMs;
+  CTimer runTimer;
+  CTimer stallTimer;
+  CTimer debugTimer;
+  CTimer settleTimer;
 
   float lastStallDeg;
   int stallCount;
 
   const char* finishReason;
   bool finishWasCancel;
-  
+
   CTimer controlTimer;
-  uint32_t lastSampleUs;
+  bool sampleTimingStarted;
 
   uint32_t samples;
   uint32_t minSampleDtUs;
@@ -133,7 +133,7 @@ private:
   float pidIntegralAccum;
 
   void reset_stats();
-  void register_sample_timing(uint32_t nowUs);
+  void register_sample_timing(uint32_t dtUs);
 
   float read_sensor(bool countForMotionStats);
 
