@@ -4,6 +4,7 @@
 #include <Arduino.h>
 #include <math.h>
 #include "door_config.h"
+#include "timer.h"
 
 /*
   ============================================================
@@ -111,8 +112,8 @@ private:
 
   const char* finishReason;
   bool finishWasCancel;
-
-  uint32_t lastControlUs;
+  
+  CTimer controlTimer;
   uint32_t lastSampleUs;
 
   uint32_t samples;

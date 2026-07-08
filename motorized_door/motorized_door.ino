@@ -130,7 +130,7 @@
 // VERSION
 // ============================================================
 
-#define APP_VERSION "v4.1c-pid-moving-no-hold"
+#define APP_VERSION "v5.0a-timer-abstraction"
 
 // ============================================================
 // PINES

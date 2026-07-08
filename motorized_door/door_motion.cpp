@@ -32,7 +32,6 @@ CDoorMotion::CDoorMotion()
   finishReason = "ninguna";
   finishWasCancel = false;
 
-  lastControlUs = 0;
   lastSampleUs = 0;
 
   samples = 0;
@@ -258,7 +257,7 @@ float CDoorMotion::angle_distance_deg(float aDeg, float bDeg)
 
 void CDoorMotion::reset_stats()
 {
-  lastControlUs = micros();
+  controlTimer.start();
   lastSampleUs = 0;
 
   samples = 0;
@@ -750,20 +749,20 @@ void CDoorMotion::start_step()
   }
 
   // Forzamos que el primer control se ejecute enseguida.
-  lastControlUs = micros() - cfg->get_control_period_us();
+  controlTimer.start_us_ago(cfg->get_control_period_us());
   state = DOOR_MOTION_MOVING;
 }
 
 void CDoorMotion::moving_step()
 {
-  uint32_t nowUs = micros();
-  uint32_t dtUs = nowUs - lastControlUs;
-
-  if (dtUs < cfg->get_control_period_us()) {
+  
+  if (!controlTimer.expired_us(cfg->get_control_period_us())) {
     return;
   }
 
-  lastControlUs = nowUs;
+  uint32_t nowUs = micros();
+  uint32_t dtUs = controlTimer.elapsed_us();
+  controlTimer.start();
 
   uint32_t controlStartUs = micros();
 
