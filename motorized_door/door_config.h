@@ -60,6 +60,15 @@
 
 #define DOOR_LOG_LEVEL_DEFAULT              DOOR_LOG_LEVEL_MSG
 
+// Tira RGB WS2812B
+#define DOOR_LED_ENABLED_DEFAULT            1UL
+#define DOOR_LED_COUNT_DEFAULT              8UL
+#define DOOR_LED_COUNT_MAX                  60UL
+#define DOOR_LED_BRIGHTNESS_DEFAULT         25UL
+#define DOOR_LED_STEP_MS_DEFAULT            100UL
+#define DOOR_LED_BREATH_MS_DEFAULT          25UL
+#define DOOR_LED_BLINK_MS_DEFAULT           180UL
+
 // Movimiento:
 //   0 = baseline fixed PWM.
 //   1 = perfil no-PID de aproximacion.
@@ -136,6 +145,12 @@ public:
       {"pid_min_effective_error_deg":6}
       {"pid_i_active_error_deg":35}
       {"pid_integral_limit":120}
+      {"led_enabled":1}
+      {"led_count":8}
+      {"led_brightness":25}
+      {"led_step_ms":100}
+      {"led_breath_ms":25}
+      {"led_blink_ms":180}
   */
   void host_cmd();
 
@@ -178,6 +193,13 @@ public:
   uint32_t get_log_level() const;
   uint32_t get_st_mode() const;
 
+  uint32_t get_led_enabled() const;
+  uint32_t get_led_count() const;
+  uint32_t get_led_brightness() const;
+  uint32_t get_led_step_ms() const;
+  uint32_t get_led_breath_ms() const;
+  uint32_t get_led_blink_ms() const;
+
   // ==========================================================
   // Setters: actualizan RAM + NVS
   // ==========================================================
@@ -215,6 +237,13 @@ public:
 
   void set_log_level(uint32_t value);
   void set_st_mode(uint32_t value);
+
+  void set_led_enabled(uint32_t value);
+  void set_led_count(uint32_t value);
+  void set_led_brightness(uint32_t value);
+  void set_led_step_ms(uint32_t value);
+  void set_led_breath_ms(uint32_t value);
+  void set_led_blink_ms(uint32_t value);
 
   // ==========================================================
   // Pedidos pendientes para que el main decida
@@ -272,6 +301,13 @@ private:
   uint32_t log_level;
   uint32_t st_mode;
 
+  uint32_t led_enabled;
+  uint32_t led_count;
+  uint32_t led_brightness;
+  uint32_t led_step_ms;
+  uint32_t led_breath_ms;
+  uint32_t led_blink_ms;
+
   // Runtime / comunicacion
   DoorHostRequest pending_request;
   uint8_t requested_position;
@@ -303,6 +339,10 @@ private:
   bool valid_float(float value) const;
   uint32_t clamp_pwm(uint32_t value) const;
   uint32_t sanitize_motion_mode(uint32_t value) const;
+  uint32_t sanitize_bool01(uint32_t value) const;
+  uint32_t sanitize_led_count(uint32_t value) const;
+  uint32_t sanitize_led_brightness(uint32_t value) const;
+  uint32_t sanitize_led_interval(uint32_t value, uint32_t defaultValue) const;
 };
 
 #endif // DOOR_CONFIG_H

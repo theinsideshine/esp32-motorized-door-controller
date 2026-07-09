@@ -12,13 +12,14 @@
 #include "door_motion.h"
 #include "door_motor.h"
 #include "door_angle_sensor.h"
+#include "door_led_strip.h"
 #include "timer.h"
 #include "log.h"
 
 /*
   ============================================================
   PROYECTO: ESP32 MOTORIZED DOOR CONTROLLER
-  VERSION: v5.0b-timer-model
+  VERSION: v5.1a-led-strip-fsm
 
   OBJETIVO DE ESTA VERSION
   ------------------------------------------------------------
@@ -131,7 +132,7 @@
 // VERSION
 // ============================================================
 
-#define APP_VERSION "v5.0b-timer-model"
+#define APP_VERSION "v5.1a-led-strip-fsm"
 
 // ============================================================
 // PINES
@@ -150,6 +151,9 @@
 #define AS5048_MOSI 11
 #define AS5048_SCK  12
 #define AS5048_MISO 13
+
+// Tira RGB WS2812B
+#define RGB_LED_DATA 6
 
 // ============================================================
 // CONFIGURACION GENERAL
@@ -195,6 +199,7 @@ CDoorConfig Config;
 CDoorMotion DoorMotion;
 CDoorMotor DoorMotor;
 CDoorAngleSensor DoorSensor(sensor);
+CLedStrip LedStrip;
 Clog Log;
 
 // ============================================================
@@ -229,6 +234,14 @@ CTimer plantPlotTimer;
 float plantPlotTargetDeg = 0.0f;
 float plantPlotStartAbsErrorDeg = 0.0f;
 uint16_t plantPlotPwmCmd = 0;
+
+// Cache local para reconfigurar la tira solo cuando cambia algun parametro JSON/NVS.
+uint32_t ledCfgEnabled = 0xFFFFFFFFUL;
+uint32_t ledCfgCount = 0xFFFFFFFFUL;
+uint32_t ledCfgBrightness = 0xFFFFFFFFUL;
+uint32_t ledCfgStepMs = 0xFFFFFFFFUL;
+uint32_t ledCfgBreathMs = 0xFFFFFFFFUL;
+uint32_t ledCfgBlinkMs = 0xFFFFFFFFUL;
 
 bool isPositionActive() {
   return DoorMotion.is_active();
@@ -455,6 +468,81 @@ void processHostRequest() {
   }
 }
 
+
+// ============================================================
+// LED STRIP / WS2812B
+// ============================================================
+
+void syncLedStripConfig() {
+  uint32_t enabled = Config.get_led_enabled();
+  uint32_t count = Config.get_led_count();
+  uint32_t brightness = Config.get_led_brightness();
+  uint32_t stepMs = Config.get_led_step_ms();
+  uint32_t breathMs = Config.get_led_breath_ms();
+  uint32_t blinkMs = Config.get_led_blink_ms();
+
+  if (enabled == ledCfgEnabled &&
+      count == ledCfgCount &&
+      brightness == ledCfgBrightness &&
+      stepMs == ledCfgStepMs &&
+      breathMs == ledCfgBreathMs &&
+      blinkMs == ledCfgBlinkMs) {
+    return;
+  }
+
+  ledCfgEnabled = enabled;
+  ledCfgCount = count;
+  ledCfgBrightness = brightness;
+  ledCfgStepMs = stepMs;
+  ledCfgBreathMs = breathMs;
+  ledCfgBlinkMs = blinkMs;
+
+  LedStrip.configure(enabled != 0,
+                     (uint16_t)count,
+                     (uint8_t)brightness,
+                     stepMs,
+                     breathMs,
+                     blinkMs);
+}
+
+void updateLedStripStateFromRuntime() {
+  if (Config.get_led_enabled() == 0) {
+    LedStrip.set_state(LED_STRIP_OFF);
+    return;
+  }
+
+  if (isFcLActive()) {
+    LedStrip.set_state(LED_STRIP_ALARM);
+    return;
+  }
+
+  DoorMotorState motorState = DoorMotor.state();
+
+  if (DoorMotion.is_moving_or_starting() || motorState == DOOR_MOTOR_LEFT || motorState == DOOR_MOTOR_RIGHT) {
+    if (motorState == DOOR_MOTOR_RIGHT) {
+      LedStrip.set_state(LED_STRIP_MOVING_RWD);
+      return;
+    }
+
+    if (motorState == DOOR_MOTOR_LEFT) {
+      LedStrip.set_state(LED_STRIP_MOVING_FWD);
+      return;
+    }
+
+    // Estado START antes de aplicar salida de motor: verde generico.
+    LedStrip.set_state(LED_STRIP_MOVING_FWD);
+    return;
+  }
+
+  LedStrip.set_state(LED_STRIP_IDLE);
+}
+
+void updateLedStrip() {
+  syncLedStripConfig();
+  updateLedStripStateFromRuntime();
+  LedStrip.update();
+}
+
 // ============================================================
 // SETUP / LOOP
 // ============================================================
@@ -473,6 +561,13 @@ void setup() {
   syncLogLevel();
 
   pinMode(FC_L_PIN, INPUT_PULLUP);
+
+  LedStrip.begin(RGB_LED_DATA,
+                 (uint16_t)Config.get_led_count(),
+                 (uint8_t)Config.get_led_brightness());
+  syncLedStripConfig();
+  LedStrip.set_state(LED_STRIP_IDLE);
+  LedStrip.update();
 
   DoorMotor.begin(STBY_PIN, AIN1_PIN, AIN2_PIN, PWM_FREQ, PWM_RES);
   deviceState = DEV_IDLE;
@@ -520,6 +615,7 @@ void loop() {
       deviceState = DEV_IDLE;
     }
 
+    updateLedStrip();
     return;
   }
 
@@ -528,6 +624,8 @@ void loop() {
   }
 
   checkMotorTimeout();
+
+  updateLedStrip();
 
   if (streamEnabled && streamTimer.expired_ms(STREAM_PERIOD_MS)) {
     streamTimer.start();

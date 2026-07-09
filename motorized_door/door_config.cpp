@@ -87,6 +87,13 @@ void CDoorConfig::load_defaults()
 
   log_level = DOOR_LOG_LEVEL_DEFAULT;
   st_mode = DOOR_ST_MODE_NORMAL;
+
+  led_enabled = DOOR_LED_ENABLED_DEFAULT;
+  led_count = DOOR_LED_COUNT_DEFAULT;
+  led_brightness = DOOR_LED_BRIGHTNESS_DEFAULT;
+  led_step_ms = DOOR_LED_STEP_MS_DEFAULT;
+  led_breath_ms = DOOR_LED_BREATH_MS_DEFAULT;
+  led_blink_ms = DOOR_LED_BLINK_MS_DEFAULT;
 }
 
 bool CDoorConfig::load_from_nvs()
@@ -128,6 +135,13 @@ bool CDoorConfig::load_from_nvs()
 
   log_level = prefs.getUInt("log", DOOR_LOG_LEVEL_DEFAULT);
   st_mode = prefs.getUInt("mode", DOOR_ST_MODE_NORMAL);
+
+  led_enabled = sanitize_bool01(prefs.getUInt("leden", DOOR_LED_ENABLED_DEFAULT));
+  led_count = sanitize_led_count(prefs.getUInt("ledcnt", DOOR_LED_COUNT_DEFAULT));
+  led_brightness = sanitize_led_brightness(prefs.getUInt("ledbri", DOOR_LED_BRIGHTNESS_DEFAULT));
+  led_step_ms = sanitize_led_interval(prefs.getUInt("ledstep", DOOR_LED_STEP_MS_DEFAULT), DOOR_LED_STEP_MS_DEFAULT);
+  led_breath_ms = sanitize_led_interval(prefs.getUInt("ledbrth", DOOR_LED_BREATH_MS_DEFAULT), DOOR_LED_BREATH_MS_DEFAULT);
+  led_blink_ms = sanitize_led_interval(prefs.getUInt("ledblink", DOOR_LED_BLINK_MS_DEFAULT), DOOR_LED_BLINK_MS_DEFAULT);
 
   if (!valid_float(pos1_deg)) {
     pos1_deg = DOOR_POS_1_DEFAULT_DEG;
@@ -242,6 +256,13 @@ void CDoorConfig::save_all()
 
   prefs.putUInt("log", log_level);
   prefs.putUInt("mode", st_mode);
+
+  prefs.putUInt("leden", led_enabled);
+  prefs.putUInt("ledcnt", led_count);
+  prefs.putUInt("ledbri", led_brightness);
+  prefs.putUInt("ledstep", led_step_ms);
+  prefs.putUInt("ledbrth", led_breath_ms);
+  prefs.putUInt("ledblink", led_blink_ms);
 }
 
 // ============================================================
@@ -398,6 +419,36 @@ uint32_t CDoorConfig::get_log_level() const
 uint32_t CDoorConfig::get_st_mode() const
 {
   return st_mode;
+}
+
+uint32_t CDoorConfig::get_led_enabled() const
+{
+  return led_enabled;
+}
+
+uint32_t CDoorConfig::get_led_count() const
+{
+  return led_count;
+}
+
+uint32_t CDoorConfig::get_led_brightness() const
+{
+  return led_brightness;
+}
+
+uint32_t CDoorConfig::get_led_step_ms() const
+{
+  return led_step_ms;
+}
+
+uint32_t CDoorConfig::get_led_breath_ms() const
+{
+  return led_breath_ms;
+}
+
+uint32_t CDoorConfig::get_led_blink_ms() const
+{
+  return led_blink_ms;
 }
 
 // ============================================================
@@ -715,6 +766,72 @@ void CDoorConfig::set_st_mode(uint32_t value)
   }
 }
 
+void CDoorConfig::set_led_enabled(uint32_t value)
+{
+  led_enabled = sanitize_bool01(value);
+
+  if (nvs_ready) {
+    prefs.putUInt("leden", led_enabled);
+  }
+}
+
+void CDoorConfig::set_led_count(uint32_t value)
+{
+  led_count = sanitize_led_count(value);
+
+  if (nvs_ready) {
+    prefs.putUInt("ledcnt", led_count);
+  }
+}
+
+void CDoorConfig::set_led_brightness(uint32_t value)
+{
+  led_brightness = sanitize_led_brightness(value);
+
+  if (nvs_ready) {
+    prefs.putUInt("ledbri", led_brightness);
+  }
+}
+
+void CDoorConfig::set_led_step_ms(uint32_t value)
+{
+  if (value == 0) {
+    return;
+  }
+
+  led_step_ms = sanitize_led_interval(value, DOOR_LED_STEP_MS_DEFAULT);
+
+  if (nvs_ready) {
+    prefs.putUInt("ledstep", led_step_ms);
+  }
+}
+
+void CDoorConfig::set_led_breath_ms(uint32_t value)
+{
+  if (value == 0) {
+    return;
+  }
+
+  led_breath_ms = sanitize_led_interval(value, DOOR_LED_BREATH_MS_DEFAULT);
+
+  if (nvs_ready) {
+    prefs.putUInt("ledbrth", led_breath_ms);
+  }
+}
+
+void CDoorConfig::set_led_blink_ms(uint32_t value)
+{
+  if (value == 0) {
+    return;
+  }
+
+  led_blink_ms = sanitize_led_interval(value, DOOR_LED_BLINK_MS_DEFAULT);
+
+  if (nvs_ready) {
+    prefs.putUInt("ledblink", led_blink_ms);
+  }
+}
+
 // ============================================================
 // PEDIDOS PENDIENTES
 // ============================================================
@@ -954,6 +1071,42 @@ void CDoorConfig::process_json(JsonDocument& doc)
     known_key = true;
   }
 
+  if (doc.containsKey("led_enabled")) {
+    set_led_enabled(doc["led_enabled"].as<uint32_t>());
+    doc["led_enabled"] = led_enabled;
+    known_key = true;
+  }
+
+  if (doc.containsKey("led_count")) {
+    set_led_count(doc["led_count"].as<uint32_t>());
+    doc["led_count"] = led_count;
+    known_key = true;
+  }
+
+  if (doc.containsKey("led_brightness")) {
+    set_led_brightness(doc["led_brightness"].as<uint32_t>());
+    doc["led_brightness"] = led_brightness;
+    known_key = true;
+  }
+
+  if (doc.containsKey("led_step_ms")) {
+    set_led_step_ms(doc["led_step_ms"].as<uint32_t>());
+    doc["led_step_ms"] = led_step_ms;
+    known_key = true;
+  }
+
+  if (doc.containsKey("led_breath_ms")) {
+    set_led_breath_ms(doc["led_breath_ms"].as<uint32_t>());
+    doc["led_breath_ms"] = led_breath_ms;
+    known_key = true;
+  }
+
+  if (doc.containsKey("led_blink_ms")) {
+    set_led_blink_ms(doc["led_blink_ms"].as<uint32_t>());
+    doc["led_blink_ms"] = led_blink_ms;
+    known_key = true;
+  }
+
   if (doc.containsKey("log_level")) {
     set_log_level(doc["log_level"].as<uint32_t>());
     doc["log_level"] = log_level;
@@ -1049,7 +1202,7 @@ void CDoorConfig::process_json(JsonDocument& doc)
 
 void CDoorConfig::send_all_params()
 {
-  StaticJsonDocument<1536> doc;
+  StaticJsonDocument<2048> doc;
 
   doc["info"] = "all-params";
   doc["result"] = "ok";
@@ -1088,6 +1241,13 @@ void CDoorConfig::send_all_params()
   doc["auto_min_move_deg"] = auto_min_move_deg;
   doc["auto_stall_max_count"] = auto_stall_max_count;
   doc["auto_final_settle_ms"] = auto_final_settle_ms;
+
+  doc["led_enabled"] = led_enabled;
+  doc["led_count"] = led_count;
+  doc["led_brightness"] = led_brightness;
+  doc["led_step_ms"] = led_step_ms;
+  doc["led_breath_ms"] = led_breath_ms;
+  doc["led_blink_ms"] = led_blink_ms;
 
   doc["log_level"] = log_level;
   doc["st_mode"] = st_mode;
@@ -1243,5 +1403,45 @@ uint32_t CDoorConfig::sanitize_motion_mode(uint32_t value) const
   }
 
   return DOOR_MOTION_MODE_FIXED_PWM;
+}
+
+uint32_t CDoorConfig::sanitize_bool01(uint32_t value) const
+{
+  if (value == 0) {
+    return 0;
+  }
+
+  return 1;
+}
+
+uint32_t CDoorConfig::sanitize_led_count(uint32_t value) const
+{
+  if (value == 0) {
+    return DOOR_LED_COUNT_DEFAULT;
+  }
+
+  if (value > DOOR_LED_COUNT_MAX) {
+    return DOOR_LED_COUNT_MAX;
+  }
+
+  return value;
+}
+
+uint32_t CDoorConfig::sanitize_led_brightness(uint32_t value) const
+{
+  if (value > 255UL) {
+    return 255UL;
+  }
+
+  return value;
+}
+
+uint32_t CDoorConfig::sanitize_led_interval(uint32_t value, uint32_t defaultValue) const
+{
+  if (value == 0) {
+    return defaultValue;
+  }
+
+  return value;
 }
 
