@@ -19,7 +19,7 @@
 /*
   ============================================================
   PROYECTO: ESP32 MOTORIZED DOOR CONTROLLER
-  VERSION: v5.1a-led-strip-fsm
+  VERSION: v5.1c-led-arrival-soft-transition
 
   OBJETIVO DE ESTA VERSION
   ------------------------------------------------------------
@@ -132,7 +132,7 @@
 // VERSION
 // ============================================================
 
-#define APP_VERSION "v5.1a-led-strip-fsm"
+#define APP_VERSION "v5.1c-led-arrival-soft-transition"
 
 // ============================================================
 // PINES

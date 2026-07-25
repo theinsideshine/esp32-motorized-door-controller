@@ -14,6 +14,7 @@ CLedStrip::CLedStrip()
   stepPeriodMs = 100;
   breathPeriodMs = 25;
   blinkPeriodMs = 180;
+  arrivedHoldMs = 140;
 
   currentState = LED_STRIP_OFF;
 
@@ -113,6 +114,15 @@ void CLedStrip::set_state(LedStripState newState)
     return;
   }
 
+  if (currentState == LED_STRIP_ARRIVED && newState == LED_STRIP_IDLE) {
+    return;
+  }
+
+  if ((currentState == LED_STRIP_MOVING_FWD || currentState == LED_STRIP_MOVING_RWD) &&
+      newState == LED_STRIP_IDLE) {
+    newState = LED_STRIP_ARRIVED;
+  }
+
   currentState = newState;
   reset_animation_for_state(newState);
   forceRender = true;
@@ -134,6 +144,9 @@ const char* CLedStrip::state_name() const
 
     case LED_STRIP_MOVING_RWD:
       return "MOVING_RWD";
+
+    case LED_STRIP_ARRIVED:
+      return "ARRIVED";
 
     case LED_STRIP_ALARM:
       return "ALARM";
@@ -184,6 +197,21 @@ void CLedStrip::update()
         animationTimer.start();
         render_moving(false);
         forceRender = false;
+      }
+      break;
+
+    case LED_STRIP_ARRIVED:
+      if (forceRender) {
+        // No pintar todos los LEDs juntos al llegar.
+        // Se mantiene congelado el ultimo cuadro de MOVING para evitar
+        // el destello verde simultaneo que se veia como un error visual.
+        forceRender = false;
+      }
+
+      if (animationTimer.expired_ms(arrivedHoldMs)) {
+        currentState = LED_STRIP_IDLE;
+        reset_animation_for_state(LED_STRIP_IDLE);
+        forceRender = true;
       }
       break;
 
@@ -246,13 +274,16 @@ void CLedStrip::reset_animation_for_state(LedStripState newState)
 
   switch (newState) {
     case LED_STRIP_IDLE:
-      breathLevel = 0;
+      breathLevel = 40;
       breathDirection = 1;
       break;
 
     case LED_STRIP_MOVING_FWD:
     case LED_STRIP_MOVING_RWD:
       movingIndex = 0;
+      break;
+
+    case LED_STRIP_ARRIVED:
       break;
 
     case LED_STRIP_ALARM:
@@ -329,6 +360,13 @@ void CLedStrip::render_moving(bool forward)
       movingIndex--;
     }
   }
+}
+
+void CLedStrip::render_arrived()
+{
+  // Intencionalmente vacio.
+  // ARRIVED conserva el ultimo patron de MOVING por un instante y luego
+  // pasa a IDLE. Esto evita un flash de todos los LEDs verdes juntos.
 }
 
 void CLedStrip::render_alarm()

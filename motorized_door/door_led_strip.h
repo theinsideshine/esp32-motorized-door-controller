@@ -19,6 +19,7 @@
     - IDLE: azul respiracion suave.
     - MOVING_FWD: verde desplazandose hacia adelante logico.
     - MOVING_RWD: verde desplazandose hacia atras logico.
+    - ARRIVED: pausa breve conservando ultimo cuadro antes de volver a IDLE.
     - ALARM: rojo intermitente.
     - ERROR: rojo/amarillo rapido.
   ============================================================
@@ -29,6 +30,7 @@ enum LedStripState : uint8_t {
   LED_STRIP_IDLE,
   LED_STRIP_MOVING_FWD,
   LED_STRIP_MOVING_RWD,
+  LED_STRIP_ARRIVED,
   LED_STRIP_ALARM,
   LED_STRIP_ERROR
 };
@@ -71,6 +73,8 @@ private:
 
   CTimer animationTimer;
 
+  uint32_t arrivedHoldMs;
+
   uint16_t movingIndex;
   int16_t breathLevel;
   int8_t breathDirection;
@@ -86,6 +90,7 @@ private:
 
   void render_idle();
   void render_moving(bool forward);
+  void render_arrived();
   void render_alarm();
   void render_error();
 };
