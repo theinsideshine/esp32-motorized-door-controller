@@ -30,3 +30,13 @@ desktop.ini
 
 # Arduino IDE metadata temporal
 *.autosave
+
+
+# Python / beam_app
+beam_app/.venv/
+beam_app/venv/
+beam_app/__pycache__/
+beam_app/**/*.pyc
+beam_app/.pytest_cache/
+beam_app/.mypy_cache/
+beam_app/.ruff_cache/
