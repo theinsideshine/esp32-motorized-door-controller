@@ -8,6 +8,9 @@ CDoorConfig::CDoorConfig()
 
   pending_request = DOOR_REQ_NONE;
   requested_position = 0;
+  requested_from_position = 0;
+  requested_to_position = 0;
+  requested_duration_ms = 0;
 
   load_defaults();
 }
@@ -44,6 +47,9 @@ bool CDoorConfig::init()
 
   pending_request = DOOR_REQ_NONE;
   requested_position = 0;
+  requested_from_position = 0;
+  requested_to_position = 0;
+  requested_duration_ms = 0;
 
   return true;
 }
@@ -851,16 +857,46 @@ uint8_t CDoorConfig::get_requested_position() const
   return requested_position;
 }
 
+uint8_t CDoorConfig::get_requested_from_position() const
+{
+  return requested_from_position;
+}
+
+uint8_t CDoorConfig::get_requested_to_position() const
+{
+  return requested_to_position;
+}
+
+uint32_t CDoorConfig::get_requested_duration_ms() const
+{
+  return requested_duration_ms;
+}
+
 void CDoorConfig::clear_request()
 {
   pending_request = DOOR_REQ_NONE;
   requested_position = 0;
+  requested_from_position = 0;
+  requested_to_position = 0;
+  requested_duration_ms = 0;
 }
 
 void CDoorConfig::set_pending_request(DoorHostRequest req, uint8_t pos)
 {
   pending_request = req;
   requested_position = pos;
+  requested_from_position = 0;
+  requested_to_position = 0;
+  requested_duration_ms = 0;
+}
+
+void CDoorConfig::set_pending_led_sim_request(uint8_t fromPos, uint8_t toPos, uint32_t durationMs)
+{
+  pending_request = DOOR_REQ_LED_SIM;
+  requested_position = 0;
+  requested_from_position = fromPos;
+  requested_to_position = toPos;
+  requested_duration_ms = durationMs;
 }
 
 // ============================================================
@@ -1178,6 +1214,34 @@ void CDoorConfig::process_json(JsonDocument& doc)
       return;
     }
 
+    if (strcmp(key, "led-sim") == 0) {
+      uint8_t fromPos = doc["from"] | 0;
+      uint8_t toPos = doc["to"] | 0;
+      uint32_t durationMs = doc["ms"] | 0;
+
+      if (fromPos < 1 || fromPos > 3 ||
+          toPos < 1 || toPos > 3 ||
+          fromPos == toPos) {
+        send_error("invalid_led_sim_positions");
+        return;
+      }
+
+      if (durationMs == 0) {
+        send_error("invalid_led_sim_ms");
+        return;
+      }
+
+      set_pending_led_sim_request(fromPos, toPos, durationMs);
+      send_ack(doc);
+      return;
+    }
+
+    if (strcmp(key, "led-sim-stop") == 0) {
+      set_pending_request(DOOR_REQ_STOP, 0);
+      send_ack(doc);
+      return;
+    }
+
     if (strcmp(key, "factory-reset") == 0) {
       factory_reset();
       send_ok(doc);
@@ -1322,6 +1386,9 @@ void CDoorConfig::factory_reset()
 
   pending_request = DOOR_REQ_NONE;
   requested_position = 0;
+  requested_from_position = 0;
+  requested_to_position = 0;
+  requested_duration_ms = 0;
 }
 
 // ============================================================

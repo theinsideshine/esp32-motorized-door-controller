@@ -35,17 +35,17 @@
 #define DOOR_CFG_SCHEMA_VERSION   1UL
 
 // ============================================================
-// DEFAULTS EQUIVALENTES A v3.1 VALIDADA
+// DEFAULTS VALIDADOS - v5.1e / MOTOR N20 NUEVO + LED FSM
 // ============================================================
 
 #define DOOR_POS_1_DEFAULT_DEG    2.29f
 #define DOOR_POS_2_DEFAULT_DEG    291.23f
 #define DOOR_POS_3_DEFAULT_DEG    206.06f
 
-#define DOOR_PWM_MOVE_DEFAULT     70UL
+#define DOOR_PWM_MOVE_DEFAULT     80UL
 
 #define DOOR_CONTROL_PERIOD_US_DEFAULT        5000UL
-#define DOOR_AUTO_TOLERANCE_DEG_DEFAULT       1.50f
+#define DOOR_AUTO_TOLERANCE_DEG_DEFAULT       2.00f
 #define DOOR_AUTO_CROSS_MARGIN_DEG_DEFAULT    0.20f
 #define DOOR_AUTO_MAX_RUN_MS_DEFAULT          10000UL
 #define DOOR_AUTO_STALL_CHECK_MS_DEFAULT      250UL
@@ -65,33 +65,33 @@
 #define DOOR_LED_COUNT_DEFAULT              8UL
 #define DOOR_LED_COUNT_MAX                  60UL
 #define DOOR_LED_BRIGHTNESS_DEFAULT         25UL
-#define DOOR_LED_STEP_MS_DEFAULT            100UL
+#define DOOR_LED_STEP_MS_DEFAULT            60UL
 #define DOOR_LED_BREATH_MS_DEFAULT          25UL
 #define DOOR_LED_BLINK_MS_DEFAULT           180UL
 
 // Movimiento:
 //   0 = baseline fixed PWM.
 //   1 = perfil no-PID de aproximacion.
-//   2 = PD de posicion, Ki todavia sin uso, sin HOLDING real.
+//   2 = control de posicion P/PI/PD/PID durante MOVING, sin HOLDING activo.
 #define DOOR_MOTION_MODE_FIXED_PWM             0UL
 #define DOOR_MOTION_MODE_APPROACH              1UL
 #define DOOR_MOTION_MODE_PD_POSITION           2UL
-#define DOOR_MOTION_MODE_DEFAULT               DOOR_MOTION_MODE_FIXED_PWM
+#define DOOR_MOTION_MODE_DEFAULT               DOOR_MOTION_MODE_PD_POSITION
 
 #define DOOR_PWM_START_DEFAULT                 80UL
 #define DOOR_PWM_SLOW_DEFAULT                  60UL
 #define DOOR_SLOW_ZONE_DEG_DEFAULT             20.0f
 #define DOOR_START_BOOST_MS_DEFAULT            120UL
 
-// Parametros reservados para futuro motion_mode=2.
-// v4.1a solo agrega configuracion persistente; no activa PID.
+// Parametros validados para motion_mode=2 con el motor N20 nuevo.
+// El default actual es control P: Ki=0 y Kd=0.
 #define DOOR_PID_KP_DEFAULT                    0.70f
 #define DOOR_PID_KI_DEFAULT                    0.00f
-#define DOOR_PID_KD_DEFAULT                    0.05f
+#define DOOR_PID_KD_DEFAULT                    0.00f
 #define DOOR_PID_PWM_MAX_DEFAULT               80UL
-#define DOOR_PID_PWM_MIN_EFFECTIVE_DEFAULT     55UL
-#define DOOR_PID_MIN_EFFECTIVE_ERROR_DEFAULT   6.0f
-#define DOOR_PID_I_ACTIVE_ERROR_DEFAULT        35.0f
+#define DOOR_PID_PWM_MIN_EFFECTIVE_DEFAULT     70UL
+#define DOOR_PID_MIN_EFFECTIVE_ERROR_DEFAULT   2.0f
+#define DOOR_PID_I_ACTIVE_ERROR_DEFAULT        20.0f
 #define DOOR_PID_INTEGRAL_LIMIT_DEFAULT        120.0f
 
 // ============================================================
@@ -106,7 +106,8 @@ enum DoorHostRequest : uint8_t {
   DOOR_REQ_GO_POS_1,
   DOOR_REQ_GO_POS_2,
   DOOR_REQ_GO_POS_3,
-  DOOR_REQ_STOP
+  DOOR_REQ_STOP,
+  DOOR_REQ_LED_SIM
 };
 
 class CDoorConfig {
@@ -126,29 +127,31 @@ public:
       {"info":"all-params"}
       {"cmd":"go","pos":2}
       {"cmd":"stop"}
+      {"cmd":"led-sim","from":1,"to":2,"ms":700}
+      {"cmd":"led-sim-stop"}
       {"cmd":"factory-reset"}
-      {"pwm_move":70}
+      {"pwm_move":80}
       {"pos1_deg":2.29}
       {"pos2_deg":291.23}
       {"pos3_deg":206.06}
       {"log_level":1}
-      {"motion_mode":0}
+      {"motion_mode":2}
       {"pwm_start":80}
       {"pwm_slow":60}
       {"slow_zone_deg":20}
       {"start_boost_ms":120}
       {"pid_kp":0.70}
       {"pid_ki":0.00}
-      {"pid_kd":0.05}
+      {"pid_kd":0.00}
       {"pid_pwm_max":80}
-      {"pid_pwm_min_effective":55}
-      {"pid_min_effective_error_deg":6}
-      {"pid_i_active_error_deg":35}
+      {"pid_pwm_min_effective":70}
+      {"pid_min_effective_error_deg":2}
+      {"pid_i_active_error_deg":20}
       {"pid_integral_limit":120}
       {"led_enabled":1}
       {"led_count":8}
       {"led_brightness":25}
-      {"led_step_ms":100}
+      {"led_step_ms":60}
       {"led_breath_ms":25}
       {"led_blink_ms":180}
   */
@@ -252,6 +255,9 @@ public:
   bool has_request() const;
   DoorHostRequest get_request() const;
   uint8_t get_requested_position() const;
+  uint8_t get_requested_from_position() const;
+  uint8_t get_requested_to_position() const;
+  uint32_t get_requested_duration_ms() const;
   void clear_request();
 
   // ==========================================================
@@ -311,6 +317,9 @@ private:
   // Runtime / comunicacion
   DoorHostRequest pending_request;
   uint8_t requested_position;
+  uint8_t requested_from_position;
+  uint8_t requested_to_position;
+  uint32_t requested_duration_ms;
 
   // Carga / guardado
   void load_defaults();
@@ -320,6 +329,7 @@ private:
   // Procesamiento de comunicacion
   void process_json(JsonDocument& doc);
   void set_pending_request(DoorHostRequest req, uint8_t pos);
+  void set_pending_led_sim_request(uint8_t fromPos, uint8_t toPos, uint32_t durationMs);
 
   // JSON responses
   void send_all_params();

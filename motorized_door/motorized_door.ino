@@ -19,120 +19,61 @@
 /*
   ============================================================
   PROYECTO: ESP32 MOTORIZED DOOR CONTROLLER
-  VERSION: v5.1c-led-arrival-soft-transition
+  VERSION: v5.1e-validated-defaults
+  ============================================================
 
-  OBJETIVO DE ESTA VERSION
+  ALCANCE ACTUAL
   ------------------------------------------------------------
-  Refactor conservador de la version step5 validada.
+  - ESP32-S3 + DRV8833 + motor N20 6 V.
+  - AS5048A por SPI como realimentacion angular.
+  - Posicionamiento modular mediante CDoorMotion.
+  - Control configurable por motion_mode.
+  - Default validado para el motor nuevo: motion_mode=2,
+    Kp=0.7, Ki=0, Kd=0, PWM maximo 80 y minimo efectivo 70.
+  - FSM LED WS2812B:
+      IDLE azul
+      MOVING verde segun el sentido del motor
+      ARRIVED con transicion suave
+      ALARM rojo por FC_L
+  - led-sim runtime para diagnostico:
+      usa el mismo camino DoorMotion/DoorMotor/FSM LED;
+      reemplaza solamente la lectura angular por una posicion virtual.
+      Para ensayar sin movimiento fisico se desconecta VM/6 V.
 
-  Se mantiene CDoorMotion como modulo de movimiento/posicionamiento
-  automatico, CDoorMotor como salida fisica DRV8833/PWM y se
-  extrae la lectura AS5048A a CDoorAngleSensor, manteniendo el main
-  como coordinador del producto/dispositivo.
+  ARQUITECTURA
+  ------------------------------------------------------------
+  motorized_door.ino
+    Coordina host JSON, estado superior, movimiento, sensor y LED.
 
-  No cambia el comportamiento fisico validado:
-    - mismos pines
-    - mismos sentidos
-    - mismo PWM fijo configurable por JSON
-    - mismos criterios de llegada/cruce/stall/timeout
-    - mismo periodo de control configurado
-    - mismo silencio durante el movimiento automatico
-    - mismo summary final
+  CDoorConfig
+    Configuracion RAM/NVS y protocolo JSON.
 
-  Concepto de arquitectura:
-    main / producto:
-      - host JSON
-      - configuracion
-      - decision de aceptar go/stop
-      - estado general del dispositivo
+  CDoorMotion
+    FSM de posicionamiento: START, MOVING, SETTLING e IDLE.
 
-    door_motion:
-      - maquina de posicionamiento
-      - start/update/cancel
-      - error angular
-      - llegada/cruce/stall/timeout
-      - summary
+  CDoorMotor
+    Salida DRV8833: STBY, AIN1, AIN2 y PWM.
 
-    door_motor:
-      - salida fisica DRV8833
-      - STBY / AIN1 / AIN2
-      - PWM / LEFT / RIGHT / STOP
+  CDoorAngleSensor
+    Lectura del AS5048A y medicion de tiempo de acceso.
 
-    door_angle_sensor:
-      - entrada fisica AS5048A por SPI
-      - lectura angular rad/deg
-      - velocidad y tiempo sensor_us
+  CLedStrip
+    FSM visual no bloqueante de la tira WS2812B.
 
-    PD/PID:
-      - v4.1c habilita motion_mode=2 con PID de posicion.
-      - Ki se usa en movimiento con acumulador limitado.
-      - HOLDING sigue reservado para una version posterior.
-
-    v4.1c:
-      - motion_mode=0 y motion_mode=1 mantienen el flujo validado.
-      - motion_mode=2 usa PID para llegar a posicion y cortar.
-      - HOLDING queda reservado; todavia no se mantiene posicion.
-  ============================================================
-*/
-/*
-  ============================================================
-  COMANDOS DE PRUEBA - STEP8F PLANT TRAVEL PLOTTER
-  ============================================================
-
-  Objetivo:
-    Graficar respuesta de planta para un PWM fijo.
-
-  Variables graficadas:
-    travel = recorrido realizado desde el inicio del movimiento
-    target = recorrido total requerido para llegar al setpoint
-
-  Lectura:
-    travel arranca en 0 y sube hacia target.
-    La pendiente de travel representa la velocidad angular aproximada.
-    Para comparar PWM, repetir el mismo movimiento con pwm_move distinto.
-
-  Importante:
-    Usar solo motion_mode=0 para identificación de planta.
-    Configurar con log_level=1.
-    Graficar con log_level=3.
-    En log_level=3 no salen ACK ni summaries para no ensuciar el Plotter.
-
-  Ver parametros:
-    {"log_level":1}
-    {"info":"all-params"}
-
-  Ensayo PWM 70:
-    {"log_level":1}
-    {"motion_mode":0}
-    {"pwm_move":70}
-    {"info":"all-params"}
-    {"log_level":3}
-    {"cmd":"go","pos":3}
-
-  Ensayo PWM 75:
-    {"log_level":1}
-    {"pwm_move":75}
-    {"info":"all-params"}
-    {"log_level":3}
-    {"cmd":"go","pos":1}
-
-  Ensayo PWM 80:
-    {"log_level":1}
-    {"pwm_move":80}
-    {"info":"all-params"}
-    {"log_level":3}
-    {"cmd":"go","pos":3}
-
-  Tiempo aproximado:
-    tiempo_ms = cantidad_de_muestras * PLANT_PLOT_PERIOD_MS
-
+  NOTAS
+  ------------------------------------------------------------
+  - HOLDING activo permanece reservado para hardware real de bloqueo.
+  - El problema de tironeo observado tras cambiar el motor fue aislado
+    al termino D de la implementacion actual. Con Kd=0 el movimiento y
+    la animacion LED quedaron validados.
+  - La referencia completa de comandos y defaults vive en readme.md.
   ============================================================
 */
 // ============================================================
 // VERSION
 // ============================================================
 
-#define APP_VERSION "v5.1c-led-arrival-soft-transition"
+#define APP_VERSION "v5.1e-validated-defaults"
 
 // ============================================================
 // PINES
@@ -243,6 +184,13 @@ uint32_t ledCfgStepMs = 0xFFFFFFFFUL;
 uint32_t ledCfgBreathMs = 0xFFFFFFFFUL;
 uint32_t ledCfgBlinkMs = 0xFFFFFFFFUL;
 
+// led-sim usa el recorrido normal; solo reemplaza temporalmente al AS5048A.
+bool ledSimActive = false;
+uint8_t ledSimFromPos = 0;
+uint8_t ledSimToPos = 0;
+uint32_t ledSimDurationMs = 0;
+uint32_t ledSimStartMs = 0;
+
 bool isPositionActive() {
   return DoorMotion.is_active();
 }
@@ -280,14 +228,32 @@ const char* deviceStateName() {
 // SENSOR
 // ============================================================
 
+float readLedSimDeg() {
+  float fromDeg = Config.get_pos_deg(ledSimFromPos);
+  float toDeg = Config.get_pos_deg(ledSimToPos);
+  float deltaDeg = angleErrorDeg(fromDeg, toDeg);
+  uint32_t elapsedMs = millis() - ledSimStartMs;
+
+  if (elapsedMs >= ledSimDurationMs) {
+    return toDeg;
+  }
+
+  float progress = (float)elapsedMs / (float)ledSimDurationMs;
+  return normalize360(fromDeg + deltaDeg * progress);
+}
+
 float readSensorDegMeasured(bool countForMotionStats) {
   (void)countForMotionStats;
+
+  if (ledSimActive) {
+    return readLedSimDeg();
+  }
 
   return DoorSensor.read_deg();
 }
 
 uint32_t getLastSensorReadUs() {
-  return DoorSensor.last_read_us();
+  return ledSimActive ? 0 : DoorSensor.last_read_us();
 }
 
 bool isFcLActive() {
@@ -410,7 +376,10 @@ void startDoorMotionTo(uint8_t pos, const char* targetName) {
     // DoorMotion.start() ya leyo el sensor mediante callback.
     // Usamos el valor actual del wrapper para fijar el error inicial
     // de la grafica relativa.
-    plantPlotStartAbsErrorDeg = fabs(angleErrorDeg(DoorSensor.deg(), plantPlotTargetDeg));
+    plantPlotStartAbsErrorDeg = fabs(angleErrorDeg(
+      ledSimActive ? readLedSimDeg() : DoorSensor.deg(),
+      plantPlotTargetDeg
+    ));
 
     // Para identificacion de planta usar motion_mode=0.
     // En ese modo pwm_cmd coincide con la entrada fija aplicada.
@@ -428,6 +397,9 @@ void processHostRequest() {
   }
 
   DoorHostRequest req = Config.get_request();
+  uint8_t requestedFromPos = Config.get_requested_from_position();
+  uint8_t requestedToPos = Config.get_requested_to_position();
+  uint32_t requestedDurationMs = Config.get_requested_duration_ms();
   Config.clear_request();
 
   if (DoorMotion.is_busy() && req != DOOR_REQ_STOP) {
@@ -461,6 +433,21 @@ void processHostRequest() {
 
     case DOOR_REQ_GO_POS_3:
       startDoorMotionTo(3, "POS_3");
+      break;
+
+    case DOOR_REQ_LED_SIM:
+      ledSimFromPos = requestedFromPos;
+      ledSimToPos = requestedToPos;
+      ledSimDurationMs = requestedDurationMs;
+      ledSimStartMs = millis();
+      ledSimActive = true;
+
+      // Desde aca corre exactamente el camino normal de movimiento y LED.
+      startDoorMotionTo(ledSimToPos, "LED_SIM");
+
+      if (!DoorMotion.is_active()) {
+        ledSimActive = false;
+      }
       break;
 
     default:
@@ -572,7 +559,7 @@ void setup() {
   DoorMotor.begin(STBY_PIN, AIN1_PIN, AIN2_PIN, PWM_FREQ, PWM_RES);
   deviceState = DEV_IDLE;
 
-  // Mantener inicializacion AS5048A exactamente igual a Step 5 validado.
+  // Mantener la secuencia de inicializacion AS5048A ya validada.
   SPI.begin(AS5048_SCK, AS5048_MISO, AS5048_MOSI, AS5048_CS);
   sensor.init(&SPI);
 
@@ -613,6 +600,7 @@ void loop() {
 
     if (!DoorMotion.is_active() && deviceState == DEV_POSITIONING) {
       deviceState = DEV_IDLE;
+      ledSimActive = false;
     }
 
     updateLedStrip();
@@ -621,6 +609,7 @@ void loop() {
 
   if (deviceState == DEV_POSITIONING) {
     deviceState = DEV_IDLE;
+    ledSimActive = false;
   }
 
   checkMotorTimeout();
