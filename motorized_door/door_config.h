@@ -35,7 +35,7 @@
 #define DOOR_CFG_SCHEMA_VERSION   1UL
 
 // ============================================================
-// DEFAULTS VALIDADOS - v5.2b / MOTOR N20 NUEVO + DANGER BUTTON FSM
+// DEFAULTS VALIDADOS - v5.2c / MOTOR N20 NUEVO + RUNTIME EVENTS
 // ============================================================
 
 #define DOOR_POS_1_DEFAULT_DEG    2.29f
@@ -284,6 +284,20 @@ public:
                                    const char* reason,
                                    const char* deviceState);
 
+  // Snapshot runtime expuesto por info all-params.
+  // El main conserva la autoridad sobre la FSM y el sensor.
+  void set_runtime_status(const char* deviceState, float currentDeg);
+
+  // Evento JSON estructurado al finalizar un movimiento o ciclo.
+  void send_runtime_completion_event(const char* eventName,
+                                     const char* command,
+                                     uint8_t position,
+                                     bool success,
+                                     const char* reason,
+                                     const char* deviceState,
+                                     float finalDeg,
+                                     float targetDeg);
+
   // ==========================================================
   // Info / reset
   // ==========================================================
@@ -346,6 +360,9 @@ private:
   uint8_t requested_from_position;
   uint8_t requested_to_position;
   uint32_t requested_duration_ms;
+
+  char runtime_device_state[32];
+  float runtime_current_deg;
 
   // Carga / guardado
   void load_defaults();

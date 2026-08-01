@@ -1,0 +1,56 @@
+{
+  "simulation": {
+    "notice": "Datos locales de simulación. presentation_state, current_angle_deg, selected_command y last_result no definen el contrato serie.",
+    "presentation_state": "IDLE",
+    "pending_command": null,
+    "cycle_duration_ms": 4200,
+    "connected": false
+  },
+  "identity": {
+    "app_version": "v5.2b-danger-button-fsm"
+  },
+  "state": {
+    "device_state": "DEV_READY",
+    "selected_command": null,
+    "last_command": "NINGUNO",
+    "last_result": {"reason": "device_not_ready"},
+    "danger_confirmed": false
+  },
+  "telemetry": {
+    "current_angle_deg": 291.23,
+    "travel": 291.23,
+    "setpoint": 291.23,
+    "error": 0.0,
+    "abs_error": 0.0,
+    "arrival_tol": 2.0,
+    "pwm_cmd": 0.0,
+    "rotation_direction": "NONE"
+  },
+  "positions": {
+    "pos1_deg": 2.29,
+    "pos2_deg": 291.23,
+    "pos3_deg": 206.06
+  },
+  "pid": {
+    "motion_mode": 2,
+    "pwm_move": 80,
+    "pid_kp": 0.7,
+    "pid_ki": 0.0,
+    "pid_kd": 0.0,
+    "pid_pwm_max": 80,
+    "pid_pwm_min_effective": 70,
+    "pid_min_effective_error_deg": 2.0,
+    "pid_i_active_error_deg": 20.0,
+    "pid_integral_limit": 120.0,
+    "control_period_us": 5000,
+    "auto_tolerance_deg": 2.0
+  },
+  "configuration": {
+    "open_wait_ms": 1800,
+    "danger_time_ms": 3000,
+    "led_enabled": true,
+    "led_blink_ms": 400,
+    "log_level": "INFO",
+    "st_mode": 0
+  }
+}

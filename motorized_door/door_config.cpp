@@ -12,6 +12,10 @@ CDoorConfig::CDoorConfig()
   requested_to_position = 0;
   requested_duration_ms = 0;
 
+  strncpy(runtime_device_state, "UNKNOWN", sizeof(runtime_device_state));
+  runtime_device_state[sizeof(runtime_device_state) - 1] = '\0';
+  runtime_current_deg = 0.0f;
+
   load_defaults();
 }
 
@@ -951,6 +955,42 @@ void CDoorConfig::send_runtime_command_result(const char* command,
   send_json(doc);
 }
 
+void CDoorConfig::set_runtime_status(const char* deviceState, float currentDeg)
+{
+  const char* safeState = deviceState == nullptr ? "UNKNOWN" : deviceState;
+
+  strncpy(runtime_device_state, safeState, sizeof(runtime_device_state));
+  runtime_device_state[sizeof(runtime_device_state) - 1] = '\0';
+  runtime_current_deg = currentDeg;
+}
+
+void CDoorConfig::send_runtime_completion_event(const char* eventName,
+                                                const char* command,
+                                                uint8_t position,
+                                                bool success,
+                                                const char* reason,
+                                                const char* deviceState,
+                                                float finalDeg,
+                                                float targetDeg)
+{
+  StaticJsonDocument<384> doc;
+
+  doc["event"] = eventName == nullptr ? "runtime-complete" : eventName;
+  doc["cmd"] = command == nullptr ? "" : command;
+
+  if (position >= 1 && position <= 3) {
+    doc["pos"] = position;
+  }
+
+  doc["result"] = success ? "ok" : "error";
+  doc["reason"] = reason == nullptr ? "sin_reason" : reason;
+  doc["device_state"] = deviceState == nullptr ? "UNKNOWN" : deviceState;
+  doc["final_deg"] = finalDeg;
+  doc["target_deg"] = targetDeg;
+
+  send_json(doc);
+}
+
 // ============================================================
 // HOST CMD - SOLO JSON
 // ============================================================
@@ -1340,7 +1380,7 @@ void CDoorConfig::process_json(JsonDocument& doc)
 
 void CDoorConfig::send_all_params()
 {
-  StaticJsonDocument<2048> doc;
+  StaticJsonDocument<2560> doc;
 
   doc["info"] = "all-params";
   doc["result"] = "ok";
@@ -1391,6 +1431,9 @@ void CDoorConfig::send_all_params()
   doc["st_mode"] = st_mode;
   doc["open_wait_ms"] = open_wait_ms;
   doc["danger_time_ms"] = danger_time_ms;
+
+  doc["device_state"] = runtime_device_state;
+  doc["current_deg"] = runtime_current_deg;
 
   doc["pending_request"] = (uint8_t)pending_request;
   doc["requested_position"] = requested_position;

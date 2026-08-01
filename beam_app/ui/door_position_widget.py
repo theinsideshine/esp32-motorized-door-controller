@@ -1,279 +1,221 @@
 import math
 
-from PySide6.QtCore import Property, QRectF, Qt, Signal
-from PySide6.QtGui import QColor, QFont, QMouseEvent, QPainter, QPen
+from PySide6.QtCore import Property, QPointF, QRectF, Qt, Signal
+from PySide6.QtGui import QColor, QFont, QMouseEvent, QPainter, QPainterPath, QPen, QPolygonF
 from PySide6.QtWidgets import QWidget
 
 
 class DoorPositionWidget(QWidget):
-    positionSelected = Signal(str)
+    """Modern 0..360 degree position view for an AS5048A absolute sensor."""
 
+    positionSelected = Signal(str)
     _POSITION_KEYS = ("pos1_deg", "pos2_deg", "pos3_deg")
-    _POSITION_LABELS = {
-        "pos1_deg": "POS_1",
-        "pos2_deg": "POS_2",
-        "pos3_deg": "POS_3",
-    }
+    _LABELS = {"pos1_deg": "POS_1", "pos2_deg": "POS_2", "pos3_deg": "POS_3"}
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._positions = {
-            "pos1_deg": 2.29,
-            "pos2_deg": 291.23,
-            "pos3_deg": 206.06,
-        }
-        self._travel = 152.40
-        self._setpoint = 206.06
+        self._positions = {"pos1_deg": 2.29, "pos2_deg": 291.23, "pos3_deg": 206.06}
+        self._travel = 291.23
+        self._setpoint = 291.23
+        self._arrival_tol = 2.0
+        self._direction = "NONE"
+        self._presentation_state = None
         self._selected_position = None
         self._interaction_enabled = True
-        self._station_hit_areas = {}
-
-        self.setMinimumSize(620, 260)
+        self._hit_areas = {}
+        self.setMinimumSize(620, 430)
         self.setMouseTracking(True)
 
-    def sizeHint(self):
-        return super().sizeHint().expandedTo(self.minimumSize())
-
     def set_positions(self, pos1_deg, pos2_deg, pos3_deg):
-        self._positions = {
-            "pos1_deg": self._finite_float(pos1_deg, "pos1_deg"),
-            "pos2_deg": self._finite_float(pos2_deg, "pos2_deg"),
-            "pos3_deg": self._finite_float(pos3_deg, "pos3_deg"),
-        }
+        self._positions = {k: self._normalize(v) for k, v in zip(self._POSITION_KEYS, (pos1_deg, pos2_deg, pos3_deg))}
         self.update()
 
-    def set_pos1_deg(self, value):
-        self._set_position("pos1_deg", value)
+    def set_telemetry(self, travel, setpoint, direction=None, arrival_tol=None):
+        self._travel = self._normalize(travel)
+        self._setpoint = self._normalize(setpoint)
+        if direction is not None:
+            self._direction = str(direction).upper()
+        if arrival_tol is not None:
+            self._arrival_tol = max(0.0, float(arrival_tol))
+        self.update()
 
-    def set_pos2_deg(self, value):
-        self._set_position("pos2_deg", value)
-
-    def set_pos3_deg(self, value):
-        self._set_position("pos3_deg", value)
-
-    def set_telemetry(self, travel, setpoint):
-        self._travel = self._finite_float(travel, "travel")
-        self._setpoint = self._finite_float(setpoint, "setpoint")
+    def set_presentation_state(self, state):
+        """Set an optional local simulation state used only for presentation."""
+        self._presentation_state = state
         self.update()
 
     def set_travel(self, value):
-        self._travel = self._finite_float(value, "travel")
-        self.update()
+        self._travel = self._normalize(value); self.update()
 
     def set_setpoint(self, value):
-        self._setpoint = self._finite_float(value, "setpoint")
+        self._setpoint = self._normalize(value); self.update()
+
+    def set_pos1_deg(self, value): self._set_position("pos1_deg", value)
+    def set_pos2_deg(self, value): self._set_position("pos2_deg", value)
+    def set_pos3_deg(self, value): self._set_position("pos3_deg", value)
+
+    def set_selected_position(self, key):
+        if key is not None and key not in self._POSITION_KEYS:
+            raise ValueError(f"Unknown position key: {key}")
+        self._selected_position = key
         self.update()
 
-    def set_selected_position(self, position_key):
-        if position_key is not None and position_key not in self._POSITION_KEYS:
-            raise ValueError(f"Unknown position key: {position_key}")
-        self._selected_position = position_key
-        self.update()
-
-    def clear_selection(self):
-        self.set_selected_position(None)
-
-    def selected_position(self):
-        return self._selected_position
-
-    def selected_value(self):
-        if self._selected_position is None:
-            return None
-        return self._positions[self._selected_position]
+    def clear_selection(self): self.set_selected_position(None)
+    def selected_position(self): return self._selected_position
+    def selected_value(self): return None if self._selected_position is None else self._positions[self._selected_position]
 
     def set_interaction_enabled(self, enabled):
-        self._interaction_enabled = bool(enabled)
-        self.setCursor(Qt.ArrowCursor)
-        self.update()
+        self._interaction_enabled = bool(enabled); self.update()
 
-    def interaction_enabled(self):
-        return self._interaction_enabled
+    def interaction_enabled(self): return self._interaction_enabled
 
-    pos1_deg = Property(float, lambda self: self._positions["pos1_deg"], set_pos1_deg)
-    pos2_deg = Property(float, lambda self: self._positions["pos2_deg"], set_pos2_deg)
-    pos3_deg = Property(float, lambda self: self._positions["pos3_deg"], set_pos3_deg)
-    travel = Property(float, lambda self: self._travel, set_travel)
-    setpoint = Property(float, lambda self: self._setpoint, set_setpoint)
+    pos1_deg = Property(float, lambda s: s._positions["pos1_deg"], set_pos1_deg)
+    pos2_deg = Property(float, lambda s: s._positions["pos2_deg"], set_pos2_deg)
+    pos3_deg = Property(float, lambda s: s._positions["pos3_deg"], set_pos3_deg)
+    travel = Property(float, lambda s: s._travel, set_travel)
+    setpoint = Property(float, lambda s: s._setpoint, set_setpoint)
     interactionEnabled = Property(bool, interaction_enabled, set_interaction_enabled)
 
     def paintEvent(self, event):
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
-        painter.setRenderHint(QPainter.TextAntialiasing)
-
+        painter.setRenderHints(QPainter.Antialiasing | QPainter.TextAntialiasing)
         outer = QRectF(self.rect()).adjusted(1, 1, -1, -1)
-        painter.setPen(QPen(QColor("#DDE3E8"), 1))
-        painter.setBrush(QColor("#FFFFFF"))
+        painter.setPen(QPen(QColor("#2b3b50"), 1))
+        painter.setBrush(QColor("#121a26"))
         painter.drawRoundedRect(outer, 16, 16)
-
         self._draw_header(painter, outer)
-        track = QRectF(outer.left() + 52, outer.top() + 145, outer.width() - 104, 6)
-        range_min, range_max = self._display_range()
-        station_points = {
-            key: self._value_to_x(value, track, range_min, range_max)
-            for key, value in self._positions.items()
-        }
-
-        self._draw_track(painter, track, range_min, range_max)
-        self._draw_stations(painter, track, station_points)
-        self._draw_setpoint(painter, track, range_min, range_max)
-        self._draw_travel(painter, track, range_min, range_max)
-        self._draw_readout(painter, outer)
-
-    def mouseMoveEvent(self, event):
-        if not self._interaction_enabled:
-            self.setCursor(Qt.ArrowCursor)
-            return
-        over_station = any(area.contains(event.position()) for area in self._station_hit_areas.values())
-        self.setCursor(Qt.PointingHandCursor if over_station else Qt.ArrowCursor)
-
-    def mouseReleaseEvent(self, event: QMouseEvent):
-        if event.button() != Qt.LeftButton or not self._interaction_enabled:
-            return
-        for key, area in self._station_hit_areas.items():
-            if area.contains(event.position()):
-                self.set_selected_position(key)
-                self.positionSelected.emit(key)
-                event.accept()
-                return
-        super().mouseReleaseEvent(event)
+        side = min(outer.width() * 0.48, outer.height() - 96)
+        center = QPointF(outer.left() + outer.width() * 0.33, outer.top() + 64 + side / 2)
+        radius = side * 0.40
+        self._draw_dial(painter, center, radius)
+        self._draw_readout(painter, outer, center, radius)
 
     def _draw_header(self, painter, outer):
-        painter.setPen(QColor("#17212B"))
-        painter.setFont(QFont("Segoe UI", 13, QFont.DemiBold))
-        painter.drawText(QRectF(outer.left() + 24, outer.top() + 18, 260, 24), Qt.AlignLeft, "Control de posición")
+        painter.setPen(QColor("#eef3f8")); painter.setFont(QFont("Segoe UI", 13, QFont.DemiBold))
+        painter.drawText(QRectF(outer.left()+20, outer.top()+16, 330, 25), Qt.AlignLeft, "Posición angular absoluta · AS5048A")
+        painter.setPen(QColor("#7f91a9")); painter.setFont(QFont("Segoe UI", 9))
+        subtitle = "0°–360° · haga clic en una posición" if self._interaction_enabled else "0°–360° · vista informativa · selección deshabilitada"
+        painter.drawText(QRectF(outer.left()+20, outer.top()+40, 420, 18), Qt.AlignLeft, subtitle)
 
-        painter.setPen(QColor("#7A8793"))
-        painter.setFont(QFont("Segoe UI", 9))
-        painter.drawText(QRectF(outer.left() + 24, outer.top() + 42, 200, 18), Qt.AlignLeft, "Recorrido angular")
+    def _draw_dial(self, painter, center, radius):
+        painter.setPen(QPen(QColor("#2b3b50"), 12, Qt.SolidLine, Qt.RoundCap))
+        painter.setBrush(Qt.NoBrush)
+        painter.drawEllipse(center, radius, radius)
+        for angle in range(0, 360, 30):
+            inner = self._point(center, radius-15, angle); outer = self._point(center, radius+1, angle)
+            painter.setPen(QPen(QColor("#506078"), 1 if angle % 90 else 2))
+            painter.drawLine(inner, outer)
+        painter.setFont(QFont("Segoe UI", 8)); painter.setPen(QColor("#77869a"))
+        for angle in (0, 90, 180, 270):
+            p = self._point(center, radius-31, angle)
+            painter.drawText(QRectF(p.x()-22, p.y()-9, 44, 18), Qt.AlignCenter, f"{angle}°")
 
-        status = "SIN DESTINO"
-        if self._selected_position:
-            status = f"DESTINO · {self._POSITION_LABELS[self._selected_position]}"
-        painter.setPen(QColor("#247B8A") if self._selected_position else QColor("#7A8793"))
-        painter.setFont(QFont("Segoe UI", 9, QFont.DemiBold))
-        painter.drawText(
-            QRectF(outer.right() - 250, outer.top() + 21, 226, 22),
-            Qt.AlignRight | Qt.AlignVCenter,
-            status,
-        )
-
-    def _draw_track(self, painter, track, range_min, range_max):
-        y = track.center().y()
-        painter.setPen(QPen(QColor("#CBD4DC"), 4, Qt.SolidLine, Qt.RoundCap))
-        painter.drawLine(track.left(), y, track.right(), y)
-
-        travel_x = self._value_to_x(self._travel, track, range_min, range_max, clamp=True)
-        setpoint_x = self._value_to_x(self._setpoint, track, range_min, range_max, clamp=True)
-        painter.setPen(QPen(QColor("#247B8A"), 6, Qt.SolidLine, Qt.RoundCap))
-        painter.drawLine(travel_x, y, setpoint_x, y)
-
-        if not math.isclose(travel_x, setpoint_x, abs_tol=1.0):
-            direction = 1 if setpoint_x > travel_x else -1
-            tip_x = (travel_x + setpoint_x) / 2 + direction * 7
-            painter.setBrush(QColor("#247B8A"))
-            painter.setPen(Qt.NoPen)
-            painter.drawPolygon([
-                self._point(tip_x, y),
-                self._point(tip_x - direction * 10, y - 6),
-                self._point(tip_x - direction * 10, y + 6),
-            ])
-
-    def _draw_stations(self, painter, track, station_points):
-        self._station_hit_areas = {}
-        sorted_stations = sorted(station_points.items(), key=lambda item: item[1])
-        for index, (key, x) in enumerate(sorted_stations):
+        self._hit_areas = {}
+        for key, angle in self._positions.items():
+            p = self._point(center, radius+2, angle)
             selected = key == self._selected_position
-            label_y = track.top() - 67 if index % 2 == 0 else track.top() - 50
-            hit_area = QRectF(x - 54, label_y - 6, 108, track.center().y() - label_y + 28)
-            self._station_hit_areas[key] = hit_area
+            color = QColor("#64d5ed") if selected else QColor("#8ea4bd")
+            painter.setPen(QPen(color, 2)); painter.setBrush(QColor("#121a26"))
+            painter.drawEllipse(p, 8 if selected else 6, 8 if selected else 6)
+            label = self._point(center, radius+32, angle)
+            rect = QRectF(label.x()-48, label.y()-18, 96, 36)
+            self._hit_areas[key] = rect.adjusted(-6, -6, 6, 6).united(QRectF(p.x()-15, p.y()-15, 30, 30))
+            painter.setPen(color); painter.setFont(QFont("Segoe UI", 8, QFont.DemiBold))
+            painter.drawText(rect, Qt.AlignCenter, f"{self._LABELS[key]}\n{angle:.2f}°")
 
-            if selected:
-                painter.setPen(Qt.NoPen)
-                painter.setBrush(QColor("#EDF5F8"))
-                painter.drawRoundedRect(QRectF(x - 48, label_y - 4, 96, 42), 10, 10)
+        # Setpoint: outlined diamond. Travel: solid marker. Both naturally wrap at 0/360.
+        sp = self._point(center, radius, self._setpoint)
+        diamond = QPolygonF([QPointF(sp.x(), sp.y()-10), QPointF(sp.x()+10, sp.y()),
+                             QPointF(sp.x(), sp.y()+10), QPointF(sp.x()-10, sp.y())])
+        painter.setPen(QPen(QColor("#f4c95d"), 3)); painter.setBrush(QColor("#121a26")); painter.drawPolygon(diamond)
+        tr = self._point(center, radius, self._travel)
+        painter.setPen(QPen(QColor("#dff7ff"), 2)); painter.setBrush(QColor("#2ea9d2")); painter.drawEllipse(tr, 9, 9)
 
-            color = QColor("#247B8A") if selected else QColor("#52606D")
-            painter.setPen(color)
-            painter.setFont(QFont("Segoe UI", 9, QFont.DemiBold))
-            painter.drawText(QRectF(x - 52, label_y, 104, 18), Qt.AlignCenter, self._POSITION_LABELS[key])
-            painter.setFont(QFont("Segoe UI", 10, QFont.DemiBold))
-            painter.drawText(QRectF(x - 52, label_y + 17, 104, 20), Qt.AlignCenter, f"{self._positions[key]:.2f}°")
+        delta = self._signed_delta(self._travel, self._setpoint)
+        arrived = abs(delta) <= self._arrival_tol
+        painter.setPen(Qt.NoPen); painter.setBrush(self._center_color(arrived))
+        painter.drawEllipse(center, radius*0.50, radius*0.50)
+        painter.setPen(QColor("#ffffff")); painter.setFont(QFont("Segoe UI", 20, QFont.Bold))
+        painter.drawText(QRectF(center.x()-75, center.y()-31, 150, 32), Qt.AlignCenter, f"{self._travel:.2f}°")
+        painter.setFont(QFont("Segoe UI", 9, QFont.DemiBold))
+        painter.drawText(QRectF(center.x()-90, center.y()+4, 180, 28), Qt.AlignCenter,
+                         self._presentation_text(delta, arrived))
 
-            painter.setPen(QPen(QColor("#B6C1C9"), 1))
-            painter.drawLine(x, label_y + 39, x, track.center().y() - 8)
-            painter.setPen(QPen(color, 2))
-            painter.setBrush(QColor("#FFFFFF"))
-            painter.drawEllipse(self._point(x, track.center().y()), 6 if not selected else 8, 6 if not selected else 8)
+    def _draw_readout(self, painter, outer, center, radius):
+        left = outer.left() + outer.width()*0.62
+        width = outer.right() - left - 22
+        rows = [("TRAVEL · marcador sólido", f"{self._travel:.2f}°", "#62c8eb"),
+                ("SETPOINT · rombo", f"{self._setpoint:.2f}°", "#f4c95d"),
+                ("ERROR ANGULAR MÍNIMO", f"{self._signed_delta(self._travel, self._setpoint):+.2f}°", "#eef3f8"),
+                ("SENTIDO", self._presentation_text(self._signed_delta(self._travel, self._setpoint),
+                                                     abs(self._signed_delta(self._travel, self._setpoint)) <= self._arrival_tol), "#eef3f8"),
+                ("ARRIVAL TOL", f"± {self._arrival_tol:.2f}°", "#eef3f8")]
+        y = outer.top()+78
+        for caption, value, color in rows:
+            painter.setPen(QColor("#7f91a9")); painter.setFont(QFont("Segoe UI", 8, QFont.DemiBold))
+            painter.drawText(QRectF(left, y, width, 16), Qt.AlignLeft, caption)
+            painter.setPen(QColor(color)); painter.setFont(QFont("Segoe UI", 14, QFont.DemiBold))
+            painter.drawText(QRectF(left, y+16, width, 26), Qt.AlignLeft, value)
+            y += 55
 
-    def _draw_travel(self, painter, track, range_min, range_max):
-        x = self._value_to_x(self._travel, track, range_min, range_max, clamp=True)
-        y = track.center().y()
-        painter.setPen(QPen(QColor("#FFFFFF"), 3))
-        painter.setBrush(QColor("#183B56"))
-        painter.drawEllipse(self._point(x, y), 10, 10)
+    def mouseMoveEvent(self, event):
+        over = self._interaction_enabled and any(r.contains(event.position()) for r in self._hit_areas.values())
+        self.setCursor(Qt.PointingHandCursor if over else Qt.ArrowCursor)
 
-    def _draw_setpoint(self, painter, track, range_min, range_max):
-        x = self._value_to_x(self._setpoint, track, range_min, range_max, clamp=True)
-        y = track.center().y()
-        painter.setPen(QPen(QColor("#247B8A"), 3))
-        painter.setBrush(QColor("#FFFFFF"))
-        painter.drawEllipse(self._point(x, y), 12, 12)
-        painter.setPen(Qt.NoPen)
-        painter.setBrush(QColor("#247B8A"))
-        painter.drawEllipse(self._point(x, y), 3, 3)
+    def mouseReleaseEvent(self, event: QMouseEvent):
+        if event.button() == Qt.LeftButton and self._interaction_enabled:
+            for key, rect in self._hit_areas.items():
+                if rect.contains(event.position()):
+                    self.set_selected_position(key); self.positionSelected.emit(key); return
+        super().mouseReleaseEvent(event)
 
-    def _draw_readout(self, painter, outer):
-        bottom = outer.bottom() - 20
-        left = outer.left() + 40
-        right = outer.right() - 40
-
-        painter.setPen(QColor("#7A8793"))
-        painter.setFont(QFont("Segoe UI", 8, QFont.DemiBold))
-        painter.drawText(QRectF(left, bottom - 54, 210, 16), Qt.AlignLeft, "POSICIÓN ACTUAL · travel")
-        painter.drawText(QRectF(right - 210, bottom - 54, 210, 16), Qt.AlignRight, "DESTINO · setpoint")
-
-        painter.setPen(QColor("#17212B"))
-        painter.setFont(QFont("Segoe UI", 18, QFont.DemiBold))
-        painter.drawText(QRectF(left, bottom - 38, 210, 32), Qt.AlignLeft | Qt.AlignVCenter, f"{self._travel:.2f}°")
-
-        painter.setPen(QColor("#247B8A"))
-        painter.drawText(
-            QRectF(right - 210, bottom - 38, 210, 32),
-            Qt.AlignRight | Qt.AlignVCenter,
-            f"{self._setpoint:.2f}°",
-        )
-
-    def _display_range(self):
-        values = tuple(self._positions.values())
-        minimum = min(values)
-        maximum = max(values)
-        span = maximum - minimum
-        margin = max(span * 0.08, 1.0)
-        if math.isclose(span, 0.0):
-            margin = max(abs(minimum) * 0.1, 10.0)
-        return minimum - margin, maximum + margin
+    def _set_position(self, key, value): self._positions[key] = self._normalize(value); self.update()
 
     @staticmethod
-    def _value_to_x(value, track, range_min, range_max, clamp=False):
-        ratio = (value - range_min) / (range_max - range_min)
-        if clamp:
-            ratio = max(0.0, min(1.0, ratio))
-        return track.left() + ratio * track.width()
-
-    def _set_position(self, key, value):
-        self._positions[key] = self._finite_float(value, key)
-        self.update()
+    def _normalize(value):
+        value = float(value)
+        if not math.isfinite(value): raise ValueError("angle must be finite")
+        return value % 360.0
 
     @staticmethod
-    def _finite_float(value, name):
-        converted = float(value)
-        if not math.isfinite(converted):
-            raise ValueError(f"{name} must be a finite number")
-        return converted
+    def _point(center, radius, angle):
+        radians = math.radians(angle-90)
+        return QPointF(center.x()+math.cos(radians)*radius, center.y()+math.sin(radians)*radius)
 
     @staticmethod
-    def _point(x, y):
-        from PySide6.QtCore import QPointF
+    def _signed_delta(start, end): return (end-start+180.0) % 360.0 - 180.0
 
-        return QPointF(x, y)
+    def _direction_text(self, delta):
+        if abs(delta) <= self._arrival_tol: return "LLEGADA CONFIRMADA"
+        if self._direction in ("CW", "HORARIO"): return "HORARIO · CW"
+        if self._direction in ("CCW", "ANTIHORARIO"): return "ANTIHORARIO · CCW"
+        return "HORARIO · CW" if delta > 0 else "ANTIHORARIO · CCW"
+
+    def _center_color(self, arrived):
+        if self._presentation_state in ("IDLE", "IDLE_POS1", "IDLE_POS2", "IDLE_POS3"):
+            return QColor("#287fb8")
+        if self._presentation_state in (
+            "FWD_ACTIVE", "REW_ACTIVE", "GO_POS1_ACTIVE", "GO_POS2_ACTIVE", "GO_POS3_ACTIVE"
+        ):
+            return QColor("#3cc986")
+        if self._presentation_state in ("STOPPED", "ERROR"):
+            return QColor("#c93c49")
+        return QColor("#3cc986" if arrived else "#243348")
+
+    def _presentation_text(self, delta, arrived):
+        texts = {
+            "IDLE": "DETENIDA / EN REPOSO",
+            "FWD_ACTIVE": "FWD · HACIA POS_1",
+            "REW_ACTIVE": "REW · HACIA POS_3",
+            "STOPPED": "DETENIDA POR STOP",
+            "ERROR": "ERROR",
+            "GO_POS1_ACTIVE": "HACIA POS_1",
+            "GO_POS2_ACTIVE": "HACIA POS_2",
+            "GO_POS3_ACTIVE": "HACIA POS_3",
+            "IDLE_POS1": "IDLE EN POS_1",
+            "IDLE_POS2": "IDLE EN POS_2",
+            "IDLE_POS3": "IDLE EN POS_3",
+        }
+        if self._presentation_state in texts:
+            return texts[self._presentation_state]
+        return "EN TOLERANCIA" if arrived else self._direction_text(delta)

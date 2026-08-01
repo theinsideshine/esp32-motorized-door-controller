@@ -1,620 +1,316 @@
 import json
+from copy import deepcopy
 from queue import Empty
 
 import serial.tools.list_ports
+from PySide6.QtCore import QObject, QTimer
 
-from PySide6.QtCore import QTimer, QUrl
-from PySide6.QtWidgets import QMessageBox
-from PySide6.QtGui import QDesktopServices
-
-from config.app_config import GITHUB_URL, SKYCIV_URL, MSJ_INIT_COM
-
-
-from config.app_config import (
-    GITHUB_URL,
-    SKYCIV_URL,
-    MSJ_INIT_COM,
-    STATE_DISCONNECTED,
-    STATE_CONNECTED,
-    STATE_RUNNING,
-    STATUS_BAR_STYLES,
-)
-
-from config.app_config import (
-    STATE_DISCONNECTED as CFG_STATE_DISCONNECTED,
-    STATE_CONNECTED as CFG_STATE_CONNECTED,
-    STATE_RUNNING as CFG_STATE_RUNNING,
-)
-
-from core.serial_manager import SerialManager
 from core.serial_event_queue import SerialEventQueue
+from core.serial_manager import SerialManager
 
-class MainController:
-    STATE_DISCONNECTED = CFG_STATE_DISCONNECTED
-    STATE_CONNECTED = CFG_STATE_CONNECTED
-    STATE_RUNNING = CFG_STATE_RUNNING
 
-    def __init__(self, view):
-        self.view = view
-        self.serial_manager = SerialManager()
+class MainController(QObject):
+    """Simulation plus real JSON transport; confirmed state only comes from JSON in real mode."""
 
-        self.serial_queue = SerialEventQueue()
-        self.serial_manager.set_event_queue(self.serial_queue)
+    def __init__(self, view, model):
+        super().__init__(view)
+        self.view, self.model = view, model
+        self.model["simulation"].setdefault("pending_command", None)
+        self.serial_manager = SerialManager(); self.serial_queue = SerialEventQueue(); self.serial_manager.set_event_queue(self.serial_queue)
+        self._factory_defaults = deepcopy(model); self._applied_config = deepcopy(model["configuration"])
+        self._danger_flash = False; self._diagnostic_target = None; self._json_buffer = ""; self._awaiting_version = False
+        self._cycle_timer = self._single_timer(self._finish_simulated_cycle)
+        self._diagnostic_timer = self._single_timer(self._finish_simulated_diagnostic)
+        self._poll_timer = QTimer(self); self._poll_timer.timeout.connect(self._process_serial_queue); self._poll_timer.start(30)
+        self._blink_timer = QTimer(self); self._blink_timer.timeout.connect(self._blink_danger); self._blink_timer.start(450)
+        self._connect_signals(); self.view.populate_pid(model["pid"]); self.view.populate_configuration(model["configuration"])
+        self.view.set_mode(False); self.view.set_connected(False); self.refresh()
 
-        self._json_buffer = []
-        self._receiving_json = False
-        self._pending_start = False
-        self._waiting_manual_response = False
-        self._auto_refresh_done = False
+    def _single_timer(self, callback):
+        timer = QTimer(self); timer.setSingleShot(True); timer.timeout.connect(callback); return timer
 
-        self.current_state = self.STATE_DISCONNECTED
+    def _connect_signals(self):
+        self.view.mode_combo.currentTextChanged.connect(self.change_mode); self.view.refresh_ports_button.clicked.connect(self.refresh_ports)
+        self.view.tabs.currentChanged.connect(lambda index: self.refresh())
+        self.view.connection_button.clicked.connect(self.toggle_connection)
+        self.view.fwd_button.clicked.connect(lambda: self.send_cycle("fwd")); self.view.rew_button.clicked.connect(lambda: self.send_cycle("rew"))
+        self.view.stop_button.clicked.connect(self.stop); self.view.diag_stop_button.clicked.connect(self.stop)
+        for position, button in self.view.pos_buttons.items(): button.clicked.connect(lambda checked=False, p=position: self.go_position(p))
+        self.view.position_widget.positionSelected.connect(lambda key: self.go_position({"pos1_deg":"POS_1", "pos2_deg":"POS_2", "pos3_deg":"POS_3"}[key]))
+        self.view.read_config_button.clicked.connect(self.read_configuration); self.view.apply_config_button.clicked.connect(self.apply_configuration)
+        self.view.restore_config_button.clicked.connect(self.restore_configuration); self.view.factory_reset_button.clicked.connect(self.factory_reset)
+        self.view.apply_pid_button.clicked.connect(self.apply_pid)
 
-        # Handshake de conexión con el banco
-        self._waiting_init_serial = False
-        self._connect_port_name = ""
-        self._connect_timer = QTimer()
-        self._connect_timer.setSingleShot(True)
-        self._connect_timer.timeout.connect(self._handle_connect_timeout)
+    @property
+    def real_mode(self): return self.view.mode_combo.currentText() == "REAL"
 
-        self._serial_poll_timer = QTimer()
-        self._serial_poll_timer.timeout.connect(self._process_serial_queue)
-        self._serial_poll_timer.start(30)
-
-        self.setup_connections()
-        self.refresh_ports()
-        self.set_state(self.STATE_DISCONNECTED)
-
-    def setup_connections(self):
-        self.view.btn_actualizar.clicked.connect(self.refresh_ports)
-        self.view.btn_conectar.clicked.connect(self.connect_serial)
-        self.view.btn_desconectar.clicked.connect(self.disconnect_serial)
-        self.view.btn_refrescar.clicked.connect(self.refresh_data)
-        self.view.btn_iniciar.clicked.connect(self.start_test)
-        self.view.github_button.clicked.connect(self.open_github)
-        self.view.skyciv_link.clicked.connect(self.open_skyciv)
-
-    def open_skyciv(self):
-        if not SKYCIV_URL.strip():
-            self.view.status_label.setText("URL de SkyCiv no configurada")
-            return
-
-        ok = QDesktopServices.openUrl(QUrl(SKYCIV_URL))
-
-        if ok:
-            self.view.status_label.setText("Abriendo SkyCiv...")
+    def change_mode(self):
+        if self.serial_manager.is_connected(): self.disconnect_real()
+        self.model["simulation"].update(connected=False, presentation_state="IDLE", pending_command=None)
+        self.view.set_mode(self.real_mode); self.view.set_connected(False)
+        if self.real_mode:
+            self.model["state"]["device_state"] = "UNKNOWN"
+            self.refresh_ports()
         else:
-            self.view.status_label.setText("No se pudo abrir SkyCiv")
+            self.view.port_combo.clear(); self.view.port_combo.addItems(["COM3 (simulado)", "COM4 (simulado)", "loop:// demo"])
+        self.refresh()
 
-    def open_github(self):
-        if not GITHUB_URL.strip():
-            self.view.status_label.setText("URL de GitHub no configurada")
-            return
-
-        ok = QDesktopServices.openUrl(QUrl(GITHUB_URL))
-
-        if ok:
-            self.view.status_label.setText("Abriendo GitHub...")
-        else:
-            self.view.status_label.setText("No se pudo abrir GitHub")
-
-    # -----------------------------------------
-    # ESTADOS UI
-    # -----------------------------------------
-    def set_state(self, state):
-        self.current_state = state
-
-        style = STATUS_BAR_STYLES.get(
-            state,
-            {"color": "#808080", "percent": 0}
-        )
-
-        self.view.status_label.setText(state)
-        self.view.card_status.set_value(state)
-        self.view.card_status.set_percent(style["percent"])
-        self.view.card_status.set_progress_color(style["color"])
-
-        self.update_ui_state()
-
-    def update_ui_state(self):
-        state = self.current_state
-        connected = self.serial_manager.is_connected()
-        connecting = self._waiting_init_serial
-
-        self.view.puerto_combo.setEnabled(not connected and not connecting)
-        self.view.btn_actualizar.setEnabled(not connected and not connecting)
-        self.view.btn_conectar.setEnabled(not connected and not connecting)
-
-        if state == self.STATE_DISCONNECTED:
-            self.view.btn_desconectar.setEnabled(False)
-            self.view.btn_iniciar.setEnabled(False)
-            self.view.btn_refrescar.setEnabled(False)
-
-        elif state == self.STATE_CONNECTED:
-            self.view.btn_desconectar.setEnabled(True)
-            self.view.btn_iniciar.setEnabled(True)
-            self.view.btn_refrescar.setEnabled(True)
-
-        elif state == self.STATE_RUNNING:
-            self.view.btn_desconectar.setEnabled(False)
-            self.view.btn_iniciar.setEnabled(False)
-            self.view.btn_refrescar.setEnabled(False)
-
-    # -----------------------------------------
-    # PUERTOS
-    # -----------------------------------------
     def refresh_ports(self):
-        puerto_actual = self.view.puerto_combo.currentText()
+        if not self.real_mode: return
+        current = self.view.port_combo.currentText(); ports = [p.device for p in serial.tools.list_ports.comports()]
+        self.view.port_combo.clear(); self.view.port_combo.addItems(ports)
+        if current in ports: self.view.port_combo.setCurrentText(current)
+        self.model["state"]["last_result"] = ({"result":"ok", "message":f"{len(ports)} puerto(s) detectado(s)"} if ports else {"reason":"no_serial_ports"})
+        self.refresh()
 
-        self.view.puerto_combo.clear()
-        ports = serial.tools.list_ports.comports()
+    def toggle_connection(self):
+        if self.real_mode:
+            self.disconnect_real() if self.serial_manager.is_connected() else self.connect_real()
+        else: self.toggle_simulated_connection()
 
-        for port in ports:
-            self.view.puerto_combo.addItem(port.device)
-
-        if puerto_actual:
-            index = self.view.puerto_combo.findText(puerto_actual)
-            if index >= 0:
-                self.view.puerto_combo.setCurrentIndex(index)
-
-        if not ports:
-            self.view.status_label.setText("Sin puertos disponibles")
-            print("No se encontraron puertos serie")
-        else:
-            self.view.status_label.setText("Puertos actualizados")
-            print("Puertos serie actualizados")
-
-    # -----------------------------------------
-    # CONEXIÓN
-    # -----------------------------------------
-    def connect_serial(self):
-        print("[UI] Botón: Conectar")
-
-        if self.serial_manager.is_connected():
-            self.set_state(self.STATE_CONNECTED)
-            self.view.status_label.setText("Ya conectado")
-            return
-
-        port = self.view.puerto_combo.currentText().strip()
+    def connect_real(self):
+        port = self.view.port_combo.currentText().strip()
         if not port:
-            self.set_state(self.STATE_DISCONNECTED)
-            self.view.status_label.setText("Seleccione un puerto")
-            print("No hay puerto seleccionado")
-            return
+            self.model["state"]["last_result"] = {"reason":"serial_port_not_selected"}; self.refresh(); return
+        if not self.serial_manager.connect(port):
+            self.model["state"]["last_result"] = {"reason":"serial_connect_failed"}; self.refresh(); return
+        self.serial_queue.clear(); self._json_buffer = ""; self.serial_manager.start_reading()
+        self.model["state"]["device_state"] = "UNKNOWN"
+        self.model["simulation"].update(connected=True, presentation_state="IDLE", pending_command=None); self.view.set_connected(True)
+        self.model["state"]["last_result"] = {"result":"ok", "message":f"Puerto {port} abierto · solicitando versión"}
+        self._awaiting_version = True; self._send_json({"info":"version"}); self.refresh()
 
-        success = self.serial_manager.connect(port)
+    def disconnect_real(self):
+        self.serial_manager.disconnect(); self.serial_queue.clear(); self._awaiting_version = False
+        self.model["simulation"].update(connected=False, presentation_state="IDLE", pending_command=None)
+        self.model["state"]["last_result"] = {"result":"ok", "message":"Puerto serie desconectado"}
+        self.view.set_connected(False); self.refresh()
 
-        if not success:
-            self.set_state(self.STATE_DISCONNECTED)
-            self.view.status_label.setText(f"Error al conectar a {port}")
-            print(f"No se pudo conectar a {port}")
-            return
+    def toggle_simulated_connection(self):
+        connected = not self.model["simulation"]["connected"]; self._cycle_timer.stop(); self._diagnostic_timer.stop()
+        self.model["simulation"].update(connected=connected, presentation_state="IDLE", pending_command=None)
+        state, telemetry, positions = self.model["state"], self.model["telemetry"], self.model["positions"]
+        if connected:
+            state.update(device_state="DEV_READY", selected_command=None, last_result={"result":"ok", "message":"Conexión simulada establecida · READY"})
+            telemetry.update(current_angle_deg=positions["pos2_deg"], travel=positions["pos2_deg"], setpoint=positions["pos2_deg"], error=0.0, abs_error=0.0, pwm_cmd=0.0, rotation_direction="NONE")
+        else: state.update(selected_command=None, last_result={"reason":"device_not_ready"})
+        self.view.set_connected(connected); self.refresh()
 
-        print(f'Puerto abierto en {port}, esperando "{MSJ_INIT_COM}"...')
-        self.serial_queue.clear()
-        self.serial_manager.start_reading()
+    def send_cycle(self, command):
+        if not self._ready_centered():
+            self.model["state"]["last_result"] = {"reason":"device_not_ready"}; self.model["simulation"]["presentation_state"] = "ERROR"; self.refresh(); return
+        if self.real_mode:
+            if self._send_json({"cmd":command}): self._mark_pending(command.upper())
+        else:
+            self._mark_requested(command.upper(), f"{command.upper()}_ACTIVE")
+            self.model["state"]["last_result"] = {"result":"ack", "message":f"ACK simulado · ciclo {command.upper()} solicitado"}
+            self._cycle_timer.start(int(self.model["simulation"]["cycle_duration_ms"]))
+        self.refresh()
 
-        self._connect_port_name = port
-        self._waiting_init_serial = True
-        self.view.status_label.setText(f"Conectado a {port}, esperando banco...")
-        self.update_ui_state()
+    def _mark_requested(self, command, presentation):
+        self.model["state"].update(selected_command=command, last_command=command,
+                                   last_result={"result":"requested", "message":f"Comando {command} solicitado · esperando respuesta"})
+        self.model["simulation"]["presentation_state"] = presentation
 
-        self._connect_timer.start(2500)
+    def _mark_pending(self, command):
+        self.model["simulation"]["pending_command"] = command
+        self.model["state"].update(last_command=command,
+                                   last_result={"result":"requested", "message":f"Comando {command} solicitado · esperando ACK"})
 
-    def _handle_connect_timeout(self):
-        if not self._waiting_init_serial:
-            return
+    def _finish_simulated_cycle(self):
+        state, telemetry, positions = self.model["state"], self.model["telemetry"], self.model["positions"]
+        command = state["selected_command"] or state["last_command"]
+        state.update(device_state="DEV_READY", selected_command=None, last_result={"result":"ok", "message":f"Finalización simulada · ciclo {command} completo"})
+        telemetry.update(current_angle_deg=positions["pos2_deg"], travel=positions["pos2_deg"], setpoint=positions["pos2_deg"], error=0.0, abs_error=0.0, pwm_cmd=0.0, rotation_direction="NONE")
+        self.model["simulation"]["presentation_state"] = "IDLE"; self.refresh()
 
-        port = self._connect_port_name
-        print(f'[HANDSHAKE] Timeout esperando "{MSJ_INIT_COM}" en {port}')
+    def stop(self):
+        if not self.model["simulation"]["connected"]: return
+        if self.real_mode:
+            if self._send_json({"cmd":"stop"}): self._mark_pending("STOP")
+        else:
+            self._cycle_timer.stop(); self._diagnostic_timer.stop(); self._mark_requested("STOP", "STOPPED")
+            self.model["state"].update(device_state="DEV_STOPPED", selected_command=None, last_result={"result":"ack", "message":"ACK simulado · STOP"})
+            t = self.model["telemetry"]; t.update(setpoint=t["travel"], error=0.0, abs_error=0.0, pwm_cmd=0.0, rotation_direction="NONE")
+        self.refresh()
 
-        self._waiting_init_serial = False
-        self.serial_manager.disconnect()
-        self.reset_connection_flags()
-        self.reset_outputs()
-        self.set_state(self.STATE_DISCONNECTED)
+    def go_position(self, position):
+        if not self.model["simulation"]["connected"]: self.model["state"]["last_result"]={"reason":"device_not_ready"}; self.refresh(); return
+        number = {"POS_1":1, "POS_2":2, "POS_3":3}[position]
+        if self.real_mode:
+            if self._send_json({"cmd":"go", "pos":number}): self._mark_pending(f"GO_{position}")
+        else: self._start_simulated_diagnostic(position)
+        self.refresh()
 
-        QMessageBox.warning(
-            self.view,
-            "Banco no detectado",
-            f"Conectado al {port}, pero no al banco.\n\n"
-            f"No llegó el mensaje '{MSJ_INIT_COM}'."
-        )
+    def _start_simulated_diagnostic(self, position):
+        key={"POS_1":"pos1_deg","POS_2":"pos2_deg","POS_3":"pos3_deg"}[position]; target=self.model["positions"][key]
+        t=self.model["telemetry"]; delta=self._angular_delta(t["travel"],target)
+        t.update(setpoint=target,error=delta,abs_error=abs(delta),pwm_cmd=float(self.model["pid"]["pwm_move"]),rotation_direction="CW" if delta>0 else "CCW")
+        self.model["state"].update(device_state="DEV_DIAGNOSTIC_POSITIONING",selected_command=f"GO_{position}",last_command=f"GO_{position}",last_result={"result":"ack","message":f"ACK simulado · {position}"})
+        self.model["simulation"]["presentation_state"] = f"GO_POS{position[-1]}_ACTIVE"
+        self._diagnostic_target=(position,target); self.view.position_widget.set_selected_position(key); self._diagnostic_timer.start(850)
 
-    def disconnect_serial(self):
-        print("[UI] Botón: Desconectar")
+    def _finish_simulated_diagnostic(self):
+        if not self._diagnostic_target:return
+        position,target=self._diagnostic_target; self._diagnostic_target=None; final="DEV_READY" if position=="POS_2" else "DEV_STOPPED"
+        self.model["telemetry"].update(current_angle_deg=target,travel=target,setpoint=target,error=0.0,abs_error=0.0,pwm_cmd=0.0,rotation_direction="NONE")
+        self.model["state"].update(device_state=final,selected_command=None,last_result={"result":"ok","message":"Recuperación simulada · READY" if final=="DEV_READY" else f"{position} alcanzada"})
+        self.model["simulation"]["presentation_state"]=f"IDLE_POS{position[-1]}"; self.refresh()
 
-        if not self.serial_manager.is_connected():
-            self.set_state(self.STATE_DISCONNECTED)
-            self.view.status_label.setText("No hay conexión activa")
-            return
-
-        self._connect_timer.stop()
-        self._waiting_init_serial = False
-
-        self.serial_manager.disconnect()
-        print("Desconectado del puerto serie")
-
-        self.reset_connection_flags()
-        self.reset_outputs()
-        self.set_state(self.STATE_DISCONNECTED)
-
-    def reset_connection_flags(self):
-        self._json_buffer.clear()
-        self._receiving_json = False
-        self._pending_start = False
-        self._waiting_manual_response = False
-        self._auto_refresh_done = False
-        self._connect_port_name = ""
+    def _send_json(self, payload):
+        ok=self.serial_manager.send_command(json.dumps(payload,separators=(",",":")))
+        if not ok:self.model["state"]["last_result"]={"reason":"serial_send_failed"}
+        return ok
 
     def _process_serial_queue(self):
         while True:
-            try:
-                line = self.serial_queue.get_nowait()
-                self.handle_serial_data(line)
-            except Empty:
-                break
+            try:self._consume_serial_line(self.serial_queue.get_nowait())
+            except Empty:break
 
-    # -----------------------------------------
-    # ALERTAS
-    # -----------------------------------------
-    def show_running_alert(self):
-        QMessageBox.warning(
-            self.view,
-            "Ensayo en ejecución",
-            "Espere que termine la ejecución del ensayo."
-        )
+    def _consume_serial_line(self, line):
+        text=line.strip()
+        if not text:return
+        if not self._json_buffer and not text.startswith("{"):
+            print(f"[FW LOG] {text}"); return
+        self._json_buffer += text
+        decoder=json.JSONDecoder()
+        while self._json_buffer:
+            try:data,end=decoder.raw_decode(self._json_buffer)
+            except json.JSONDecodeError:return
+            self._json_buffer=self._json_buffer[end:].lstrip()
+            if isinstance(data,dict):self.process_json(data)
 
-    # -----------------------------------------
-    # REFRESH
-    # -----------------------------------------
-    def refresh_data(self):
-        print("[UI] Botón: Refrescar")
+    def _process_runtime_message(self, data):
+        event=data.get("event")
+        if event=="motion-complete":
+            self._handle_motion_complete(data); return True
+        if event=="cycle-complete":
+            self._handle_cycle_complete(data); return True
+        if data.get("result")=="ack" and data.get("cmd"):
+            self._handle_command_ack(data); return True
+        if data.get("result")=="error":
+            self._handle_command_error(data); return True
+        return False
 
-        if not self.serial_manager.is_connected():
-            print("[FLOW] Refresh cancelado: serial desconectado")
-            self.set_state(self.STATE_DISCONNECTED)
-            return
+    def _handle_command_ack(self, data):
+        command=str(data.get("cmd","")).lower(); sim=self.model["simulation"]; state=self.model["state"]
+        if command in ("fwd","rew"):
+            selected=command.upper(); state["selected_command"]=selected; sim["presentation_state"]=f"{selected}_ACTIVE"
+        elif command=="go":
+            position=int(data.get("pos",0)); state["selected_command"]=f"GO_POS_{position}"
+            if position in (1,2,3):sim["presentation_state"]=f"GO_POS{position}_ACTIVE"
+        elif command=="stop":
+            state["selected_command"]=None; sim["presentation_state"]="STOPPED"
+        sim["pending_command"]=None
+        state["last_result"]={"result":"ack","message":f"ACK recibido · {command}"}
 
-        if self._waiting_init_serial:
-            self.view.status_label.setText("Esperando banco...")
-            return
+    def _handle_motion_complete(self, data):
+        if data.get("result")!="ok" or data.get("reason")!="posicion_alcanzada":
+            self._handle_command_error(data); return
+        position=int(data.get("pos",0)); self._apply_terminal_values(data)
+        self.model["state"].update(selected_command=None,last_result={"result":"ok","message":f"Movimiento POS_{position} completado por firmware"})
+        self.model["simulation"].update(presentation_state=f"IDLE_POS{position}" if position in (1,2,3) else "IDLE",pending_command=None)
 
-        print("[FLOW] Refresh -> request_status()")
-        self._waiting_manual_response = True
-        self.request_status()
+    def _handle_cycle_complete(self, data):
+        if data.get("result")!="ok" or data.get("reason")!="posicion_alcanzada":
+            self._handle_command_error(data); return
+        command=str(data.get("cmd","")).upper(); self._apply_terminal_values(data)
+        self.model["state"].update(selected_command=None,last_result={"result":"ok","message":f"Ciclo {command} completado por firmware"})
+        self.model["simulation"].update(presentation_state="IDLE",pending_command=None)
 
-    # -----------------------------------------
-    # INICIAR ENSAYO
-    # -----------------------------------------
-    def start_test(self):
-        print("[UI] Botón: Iniciar")
+    def _apply_terminal_values(self, data):
+        telemetry=self.model["telemetry"]
+        if data.get("final_deg") is not None:
+            final=float(data["final_deg"]); telemetry["current_angle_deg"]=final; telemetry["travel"]=final
+        if data.get("target_deg") is not None:telemetry["setpoint"]=float(data["target_deg"])
+        telemetry.update(error=0.0,abs_error=0.0,pwm_cmd=0.0,rotation_direction="NONE")
+        if data.get("device_state") is not None:self.model["state"]["device_state"]=str(data["device_state"])
 
-        if not self.serial_manager.is_connected():
-            print("[FLOW] Start cancelado: serial desconectado")
-            self.set_state(self.STATE_DISCONNECTED)
-            return
+    def _handle_command_error(self, data):
+        state=self.model["state"]; state["selected_command"]=None
+        if data.get("device_state") is not None:state["device_state"]=str(data["device_state"])
+        state["last_result"]={"result":"error","reason":data.get("reason","firmware_error")}
+        self.model["simulation"].update(presentation_state="ERROR",pending_command=None)
 
-        if self._waiting_init_serial:
-            self.view.status_label.setText("Esperando banco...")
-            return
+    def process_json(self, data):
+        print(f"[FW JSON] {data}")
+        if "app_version" in data:
+            self.model["identity"]["app_version"]=str(data["app_version"]); self.view.version_label.setText(str(data["app_version"]))
+        self._merge_firmware_values(data)
+        if self._process_runtime_message(data):
+            self.refresh(); return
+        result=data.get("result")
+        if result in ("ack","ok"):
+            message=f"{result.upper()} recibido"; command=data.get("cmd") or self.model["state"]["selected_command"]
+            self.model["state"]["last_result"]={"result":result,"message":f"{message}" + (f" · {command}" if command else "")}
+            if result=="ok" and data.get("completed") is True:self.model["simulation"]["presentation_state"]="IDLE"; self.model["state"]["selected_command"]=None
+        elif result=="error":
+            self.model["state"]["last_result"]={"result":"error","reason":data.get("reason","firmware_error")}; self.model["simulation"]["presentation_state"]="ERROR"
+        elif "reason" in data:
+            self.model["state"]["last_result"]={"result":"error","reason":data["reason"]}; self.model["simulation"]["presentation_state"]="ERROR"
+        if self._awaiting_version and ("app_version" in data or data.get("info")=="version" or result in ("ack","ok")):
+            self._awaiting_version=False; self._send_json({"info":"all-params"})
+        self.refresh()
 
-        print("[FLOW] Start -> pending_start=True -> request_status()")
-        self._pending_start = True
-        self._auto_refresh_done = False
-        self._waiting_manual_response = True
-        self.request_status()
+    def _merge_firmware_values(self, data):
+        source=data.get("params",data); mappings={"positions":self.model["positions"],"pid":self.model["pid"],"configuration":self.model["configuration"],"telemetry":self.model["telemetry"]}
+        for target in mappings.values():
+            for key in tuple(target):
+                if key in source and source[key] is not None:
+                    try:target[key]=type(target[key])(source[key]) if not isinstance(target[key],bool) else bool(source[key])
+                    except (TypeError,ValueError):print(f"[FW JSON] Valor inválido ignorado: {key}={source[key]!r}")
+        if "device_state" in source:
+            self.model["state"]["device_state"]=str(source["device_state"])
+            confirmed_state=str(source["device_state"])
+            danger=confirmed_state in ("DEV_DANGER","DANGER"); self.model["state"]["danger_confirmed"]=danger
+            if danger:self.model["simulation"]["presentation_state"]="DANGER"
+            elif confirmed_state in ("DEV_OPENING_FWD","OPENING_FWD"):self.model["simulation"]["presentation_state"]="FWD_ACTIVE"
+            elif confirmed_state in ("DEV_OPENING_REW","OPENING_REW"):self.model["simulation"]["presentation_state"]="REW_ACTIVE"
+            elif confirmed_state in ("DEV_OPEN_WAIT","DEV_CLOSING_CENTER") and self.model["state"]["selected_command"] in ("FWD","REW"):
+                self.model["simulation"]["presentation_state"]=f'{self.model["state"]["selected_command"]}_ACTIVE'
+            elif confirmed_state=="DEV_READY":self.model["simulation"]["presentation_state"]="IDLE"; self.model["state"]["selected_command"]=None
+        if "current_angle_deg" in source:self.model["telemetry"]["current_angle_deg"]=float(source["current_angle_deg"]); self.model["telemetry"]["travel"]=float(source["current_angle_deg"])
+        if "current_deg" in source:self.model["telemetry"]["current_angle_deg"]=float(source["current_deg"]); self.model["telemetry"]["travel"]=float(source["current_deg"])
+        if data.get("info")=="all-params" or "params" in data:
+            if self.model["state"]["device_state"] in ("READY","STOPPED"):
+                self.model["simulation"].update(presentation_state="IDLE",pending_command=None)
+                self.model["state"]["selected_command"]=None
+            self.view.populate_configuration(self.model["configuration"]); self.view.populate_pid(self.model["pid"])
 
-    # -----------------------------------------
-    # ENVÍO DE COMANDOS
-    # -----------------------------------------
-    def request_status(self):
-        command = json.dumps({"info": "status"})
-        ok = self.serial_manager.send_command(command)
+    def read_configuration(self):
+        if self.real_mode and self.serial_manager.is_connected():self._send_json({"info":"all-params"}); self.view.config_feedback.setText("Solicitud all-params enviada al firmware.")
+        else:self.view.populate_configuration(self.model["configuration"]); self.view.config_feedback.setText("Lectura local completada.")
 
-        if ok:
-            self.view.status_label.setText("Consultando estado...")
-        else:
-            self.view.status_label.setText("Error enviando status")
-
-    def request_all_params(self):
-        command = json.dumps({"info": "all-params"})
-        ok = self.serial_manager.send_command(command)
-
-        if ok:
-            self.view.status_label.setText("Solicitando parámetros...")
-        else:
-            self.view.status_label.setText("Error enviando parámetros")
-
-    def send_distance(self, distance_mm):
-        command = json.dumps({"distance": int(distance_mm)})
-        return self.serial_manager.send_command(command)
-
-    def send_force(self, force_g):
-        command = json.dumps({"force": int(force_g)})
-        return self.serial_manager.send_command(command)
-
-    def send_start_command(self):
-        command = json.dumps({"cmd": "start"})
-        return self.serial_manager.send_command(command)
-
-    # -----------------------------------------
-    # RECEPCIÓN
-    # -----------------------------------------
-    def handle_serial_data(self, line):
-        line = line.strip()
-        if not line:
-            return
-
-        print(f"Recibido: {line}")
-
-        if line == MSJ_INIT_COM:
-            self._handle_init_serial()
-            return
-
-        if self._waiting_init_serial and not line.startswith("{"):
-            print(f"[HANDSHAKE] Ignorado durante espera: {line}")
-            return
-
-        self._json_buffer.append(line)
-        self._try_parse_json_buffer()
-
-    def _handle_init_serial(self):
-        print(f'[HANDSHAKE] Recibido "{MSJ_INIT_COM}"')
-
-        self._connect_timer.stop()
-        self._waiting_init_serial = False
-
-        if self.serial_manager.is_connected():
-            self.set_state(self.STATE_CONNECTED)
-            self.view.status_label.setText(f"Conectado a {self._connect_port_name}")
-        else:
-            self.set_state(self.STATE_DISCONNECTED)
-
-    def _try_parse_json_buffer(self):
-        raw = "".join(self._json_buffer)
-
-        objects = []
-        current = []
-        depth = 0
-        in_json = False
-
-        for ch in raw:
-            if ch == "{":
-                depth += 1
-                in_json = True
-
-            if in_json:
-                current.append(ch)
-
-            if ch == "}":
-                depth -= 1
-
-                if in_json and depth == 0:
-                    obj_text = "".join(current).strip()
-                    if obj_text:
-                        objects.append(obj_text)
-                    current = []
-                    in_json = False
-
-        remainder = "".join(current).strip()
-        self._json_buffer = [remainder] if remainder else []
-
-        for obj_text in objects:
-            try:
-                data = json.loads(obj_text)
-            except json.JSONDecodeError:
-                print(f"[JSON] Error parseando: {obj_text}")
-                continue
-
-            self.process_json_data(data)
-
-    # -----------------------------------------
-    # PROCESAMIENTO JSON
-    # -----------------------------------------
-    def process_json_data(self, data):
-        print(f"[JSON] process_json_data -> {data}")
-
-        info = data.get("info")
-
-        if info == "status":
-            print("[JSON] Detectado info=status")
-            self.process_status_response(data)
-            return
-
-        if info == "all-params":
-            print("[JSON] Detectado info=all-params")
-            self.process_all_params_response(data)
-            return
-
-        if "st_test" in data:
-            print(f"[JSON] Detectado st_test suelto -> {data.get('st_test')}")
-
-            try:
-                st_test = int(data.get("st_test", 0))
-            except Exception:
-                st_test = 0
-
-            if st_test == 0:
-                if self.serial_manager.is_connected():
-                    self.set_state(self.STATE_CONNECTED)
-                    self.view.status_label.setText("Ensayo finalizado")
-
-                if not self._waiting_manual_response and not self._auto_refresh_done:
-                    print("[FLOW] Auto refresh por fin de ensayo")
-                    self._auto_refresh_done = True
-                    self.request_status()
-            else:
-                self.set_state(self.STATE_RUNNING)
-                self.view.status_label.setText(f"Ensayo activo ({st_test})")
-
-            return
-
-        if data.get("result") == "ok":
-            print("[JSON] Detectado result=ok")
-            self.view.status_label.setText("Comando OK")
-            return
-
-        if data.get("result") == "ack":
-            print("[JSON] Detectado result=ack")
-
-            if data.get("cmd") == "start":
-                self.set_state(self.STATE_RUNNING)
-                self.view.status_label.setText("Ensayo iniciado")
-            else:
-                self.view.status_label.setText("Comando ACK")
-
-            return
-
-        print("[JSON] Mensaje no manejado")
-
-    def process_status_response(self, data):
-        print(f"[FLOW] process_status_response entrada -> {data}")
-
-        status = data.get("status", 0)
-
+    def apply_configuration(self):
+        try:values=self._read_config_fields()
+        except ValueError as exc:self.view.config_feedback.setText(f"Error de validación · {exc}");return
+        self.model["configuration"].update(values);self._applied_config=deepcopy(values);self.view.config_feedback.setText("Aplicado al modelo local; envío de configuración real aún no habilitado.");self.refresh()
+    def restore_configuration(self):self.model["configuration"]=deepcopy(self._applied_config);self.view.populate_configuration(self.model["configuration"]);self.refresh()
+    def factory_reset(self):
+        self.model["configuration"]=deepcopy(self._factory_defaults["configuration"]);self.model["pid"]=deepcopy(self._factory_defaults["pid"]);self.view.populate_configuration(self.model["configuration"]);self.view.populate_pid(self.model["pid"]);self.view.config_feedback.setText("Factory reset local simulado.");self.refresh()
+    def apply_pid(self):
         try:
-            status = int(status)
-        except (TypeError, ValueError):
-            print("[FLOW] status inválido")
-            self.view.status_label.setText("Estado inválido")
-            self._pending_start = False
-            self._waiting_manual_response = False
-            return
-
-        print(f"[FLOW] status parseado = {status}, pending_start = {self._pending_start}")
-
-        if status == 0:
-            if self.serial_manager.is_connected():
-                self.set_state(self.STATE_CONNECTED)
-        else:
-            self.set_state(self.STATE_RUNNING)
-
-        # Caso: se apretó INICIAR pero el ensayo ya estaba corriendo
-        if self._pending_start:
-            self._pending_start = False
-            self._waiting_manual_response = False
-
-            if status == 0:
-                print("[FLOW] pending_start=True y status=0 -> start_sequence()")
-                self.start_sequence()
-            else:
-                print("[FLOW] pending_start=True pero status!=0 -> alerta de ensayo en ejecución")
-                self.set_state(self.STATE_RUNNING)
-                self.view.status_label.setText("Ensayo en ejecución")
-                self.show_running_alert()
-            return
-
-        # Caso: se apretó REFRESCAR y el ensayo está corriendo
-        if self._waiting_manual_response:
-            self._waiting_manual_response = False
-
-            if status != 0:
-                print("[FLOW] Refresh manual con status!=0 -> alerta de ensayo en ejecución")
-                self.set_state(self.STATE_RUNNING)
-                self.view.status_label.setText("Ensayo en ejecución")
-                self.show_running_alert()
-                return
-
-        if status == 0:
-            print("[FLOW] Refresh normal y status=0 -> request_all_params()")
-            self.view.status_label.setText("Ensayo apagado, leyendo parámetros...")
-            self.request_all_params()
-        else:
-            print("[FLOW] status!=0 -> ensayo activo")
-            self.set_state(self.STATE_RUNNING)
-            self.view.status_label.setText(f"Ensayo activo ({status})")
-
-    def process_all_params_response(self, data):
-        print(f"[FLOW] process_all_params_response -> {data}")
-
-        self.update_measurements(data)
-        self.update_inputs(data)
-
-        print("[FLOW] UI actualizada con all-params")
-        self._waiting_manual_response = False
-
-        if self.serial_manager.is_connected():
-            self.set_state(self.STATE_CONNECTED)
-
-        self.view.status_label.setText("Parámetros actualizados")
-
-    # -----------------------------------------
-    # SECUENCIA DE INICIO
-    # -----------------------------------------
-    def start_sequence(self):
-        distance_text = self.view.distance_input.text().strip()
-        force_text = self.view.load_combo.currentText().strip()
-
-        try:
-            distance_mm = int(distance_text)
-        except ValueError:
-            self.view.status_label.setText("Distancia inválida")
-            return
-
-        try:
-            force_g = int(force_text)
-        except ValueError:
-            self.view.status_label.setText("Carga inválida")
-            return
-
-        print(f"[FLOW] start_sequence -> distance={distance_mm} mm, force={force_g} g")
-
-        ok_distance = self.send_distance(distance_mm)
-        ok_force = self.send_force(force_g)
-        ok_start = self.send_start_command()
-
-        if ok_distance and ok_force and ok_start:
-            self.view.status_label.setText("Comando de inicio enviado")
-        else:
-            self.view.status_label.setText("Error iniciando ensayo")
-
-    # -----------------------------------------
-    # UI DATA
-    # -----------------------------------------
-    def update_measurements(self, data):
-        reaction_one = self._to_float(data.get("reaction_one", 0))
-        reaction_two = self._to_float(data.get("reaction_two", 0))
-        flexion = self._to_float(data.get("flexion", 0))
-
-        self.view.card_r1.set_value(f"{reaction_one:.1f}")
-        self.view.card_r1.set_gauge_value(reaction_one)
-
-        self.view.card_r2.set_value(f"{reaction_two:.1f}")
-        self.view.card_r2.set_gauge_value(reaction_two)
-
-        if getattr(self.view, "card_flex", None) is not None:
-            self.view.card_flex.set_value(f"{flexion:.2f}")
-            self.view.card_flex.set_gauge_value(flexion)
-
-    def update_inputs(self, data):
-        distance = data.get("distance")
-        force = data.get("force")
-
-        if distance is not None:
-            self.view.distance_input.setText(str(distance))
-
-        if force is not None:
-            force_text = str(force)
-            idx = self.view.load_combo.findText(force_text)
-            if idx >= 0:
-                self.view.load_combo.setCurrentIndex(idx)
-            else:
-                self.view.load_combo.addItem(force_text)
-                self.view.load_combo.setCurrentText(force_text)
-
-    def reset_outputs(self):
-        self.view.card_r1.set_value("0.0")
-        self.view.card_r1.set_gauge_value(0)
-
-        self.view.card_r2.set_value("0.0")
-        self.view.card_r2.set_gauge_value(0)
-
-        if getattr(self.view, "card_flex", None) is not None:
-            self.view.card_flex.set_value("0.0")
-            self.view.card_flex.set_gauge_value(0)
-
-    def _to_float(self, value):
-        try:
-            return float(value)
-        except (TypeError, ValueError):
-            return 0.0
+            ints={"motion_mode","pwm_move","pid_pwm_max","pid_pwm_min_effective","control_period_us"};values={k:(int(f.text()) if k in ints else float(f.text())) for k,f in self.view.pid_inputs.items()}
+            if values["control_period_us"]<=0 or values["pid_pwm_min_effective"]>values["pid_pwm_max"]:raise ValueError("rangos PID inconsistentes")
+        except ValueError as exc:self.view.config_feedback.setText(f"Error PID · {exc}");return
+        self.model["pid"].update(values);self.model["telemetry"]["arrival_tol"]=values["auto_tolerance_deg"];self.view.config_feedback.setText("PID actualizado sólo localmente.");self.refresh()
+    def _read_config_fields(self):
+        f=self.view.config_inputs;v={"open_wait_ms":int(f["open_wait_ms"].text()),"danger_time_ms":int(f["danger_time_ms"].text()),"led_enabled":f["led_enabled"].isChecked(),"led_blink_ms":int(f["led_blink_ms"].text()),"log_level":f["log_level"].text().strip().upper(),"st_mode":int(f["st_mode"].text())}
+        if v["open_wait_ms"]<0 or v["danger_time_ms"]<=0 or v["led_blink_ms"]<=0:raise ValueError("tiempos inválidos")
+        if v["log_level"] not in {"ERROR","WARN","INFO","DEBUG","TRACE"}:raise ValueError("log_level inválido")
+        return v
+    def refresh(self):self.view.render(self.model,self.model["simulation"]["connected"],self._danger_flash)
+    def _ready_centered(self):
+        t,p,s=self.model["telemetry"],self.model["positions"],self.model["state"]
+        active_states={"FWD_ACTIVE","REW_ACTIVE","GO_POS1_ACTIVE","GO_POS2_ACTIVE","GO_POS3_ACTIVE"}
+        movement_active=self.model["simulation"]["presentation_state"] in active_states
+        if self.real_mode:
+            return self.model["simulation"]["connected"] and s["device_state"]=="READY" and not movement_active
+        return (self.model["simulation"]["connected"] and s["device_state"]=="DEV_READY"
+                and abs(self._angular_delta(t["current_angle_deg"],p["pos2_deg"]))<=self.model["pid"]["auto_tolerance_deg"]
+                and not movement_active)
+    def _blink_danger(self):
+        self._danger_flash=not self._danger_flash
+        if self.model["state"]["danger_confirmed"]:self.refresh()
+    @staticmethod
+    def _angular_delta(start,end):return (end-start+180.0)%360.0-180.0

@@ -1,549 +1,215 @@
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QPixmap, QCursor
 from PySide6.QtWidgets import (
-    QComboBox,
-    QFrame,
-    QGridLayout,
-    QHBoxLayout,
-    QLabel,
-    QLineEdit,
-    QMainWindow,
-    QPushButton,
-    QVBoxLayout,
-    QWidget,
+    QCheckBox, QComboBox, QFormLayout, QFrame, QGridLayout, QHBoxLayout,
+    QLabel, QLineEdit, QMainWindow, QPushButton, QScrollArea, QTabWidget,
+    QVBoxLayout, QWidget,
 )
 
-from config.app_config import (
-    APP_SUBTITLE,
-    APP_TITLE,
-    APP_VERSION,
-    BUTTON_CONNECT,
-    BUTTON_DISCONNECT,
-    BUTTON_GITHUB,
-    BUTTON_REFRESH,
-    BUTTON_REFRESH_PORTS,
-    BUTTON_START,
-    CARD_FLEX_TITLE,
-    CARD_R1_TITLE,
-    CARD_R2_TITLE,
-    CARD_STATUS_TITLE,
-    DEFAULT_DISTANCE,
-    DEFAULT_LOAD,
-    DEFAULT_SERIAL_PORT,
-    INITIAL_FLEX_VALUE,
-    INITIAL_R1_VALUE,
-    INITIAL_R2_VALUE,
-    INITIAL_STATUS_VALUE,
-    LABEL_DISTANCE,
-    LABEL_LOAD,
-    LABEL_PORT,
-    LOAD_OPTIONS,
-    LOGO_PATH,
-    SECTION_INPUTS,
-    SECTION_OUTPUTS,
-    SERIAL_PORT_OPTIONS,
-    SHOW_FLEX_SECTION,
-    STATUS_GUI_ONLY,
-    WINDOW_TITLE,
-    UNIT_FORCE,
-    UNIT_FLEX,
-    REACTION_GAUGE_MIN,
-    REACTION_GAUGE_MAX,
-    REACTION_GAUGE_INITIAL,
-    BEAM_DIAGRAM_PATH,
-)
+from ui.door_position_widget import DoorPositionWidget
 
-from ui.graphics import OutputCard
+
+STATE_LABELS = {
+    "UNKNOWN": "SIN CONFIRMAR",
+    "DEV_BOOT": "BOOT", "DEV_CENTERING": "CENTERING", "DEV_READY": "READY",
+    "DEV_OPENING_FWD": "CICLO FWD ACTIVO", "DEV_OPENING_REW": "CICLO REW ACTIVO",
+    "DEV_DIAGNOSTIC_POSITIONING": "POSICIONAMIENTO DE DIAGNÓSTICO",
+    "DEV_MANUAL_MOVING": "MOVIMIENTO MANUAL", "DEV_STOPPED": "STOPPED", "DEV_DANGER": "DANGER",
+}
+
+
+def panel():
+    frame = QFrame(); frame.setObjectName("panel"); return frame
+
+
+class ValueCard(QFrame):
+    def __init__(self, title, accent=False):
+        super().__init__(); self.setObjectName("valueCard")
+        box = QVBoxLayout(self); box.setContentsMargins(16, 12, 16, 12); box.setSpacing(4)
+        caption = QLabel(title.upper()); caption.setObjectName("cardCaption")
+        self.value = QLabel("—"); self.value.setObjectName("accentValue" if accent else "cardValue"); self.value.setWordWrap(True)
+        box.addWidget(caption); box.addWidget(self.value)
 
 
 class MainWindow(QMainWindow):
-    def __init__(self):
-        super().__init__()
-        self.setWindowTitle(WINDOW_TITLE)
-        self.resize(1320, 820)
-        self.setMinimumSize(1100, 720)
-
-        self.setStyleSheet("""
-            QMainWindow {
-                background-color: #0f1115;
-            }
-
-            QWidget {
-                background-color: #0f1115;
-                color: #f2f4f8;
-                font-family: "Segoe UI";
-                font-size: 13px;
-            }
-
-            QLabel#subtitleLabel {
-                color: #cfd6e4;
-                font-size: 16px;
-                font-weight: 600;
-            }
-
-            QLabel#titleLabel {
-                color: white;
-                font-size: 28px;
-                font-weight: 800;
-            }
-
-            QLabel#sectionTitle {
-                color: white;
-                font-size: 16px;
-                font-weight: 700;
-            }
-
-            QLabel#inputLabel {
-                color: #71b0ff;
-                font-size: 14px;
-                font-weight: 700;
-            }
-
-            QLabel#statusLabel {
-                color: #4da3ff;
-                font-size: 14px;
-                font-weight: 700;
-            }
-
-            QPushButton {
-                background-color: #1e2633;
-                color: white;
-                border: 1px solid #394355;
-                border-radius: 10px;
-                padding: 10px 18px;
-                font-size: 13px;
-                font-weight: 600;
-                min-height: 18px;
-            }
-
-            QPushButton:hover {
-                background-color: #273143;
-            }
-
-            QPushButton:pressed {
-                background-color: #18202c;
-            }
-
-            QPushButton#primaryButton {
-                background-color: #1b4fa3;
-                border: 1px solid #4d8dff;
-            }
-
-            QPushButton#primaryButton:hover {
-                background-color: #2461c7;
-            }
-
-            QPushButton#successButton {
-                background-color: #1f6a3b;
-                border: 1px solid #4ad27f;
-            }
-
-            QPushButton#successButton:hover {
-                background-color: #27854a;
-            }
-
-            QComboBox, QLineEdit {
-                background-color: #161c26;
-                color: white;
-                border: 1px solid #3b4557;
-                border-radius: 8px;
-                padding: 8px 10px;
-                min-height: 20px;
-            }
-
-            QComboBox::drop-down {
-                border: none;
-            }
-
-            QFrame#panelFrame {
-                background-color: #11161f;
-                border: 1px solid #242c3a;
-                border-radius: 16px;
-            }
-
-            QFrame#groupFrame {
-                background-color: #151b25;
-                border: 1px solid #262f3f;
-                border-radius: 14px;
-            }
-
-            QLabel#logoBox {
-                background-color: transparent;
-                border: none;
-            }
-
-            QFrame#outputCard {
-                background-color: #171f2b;
-                border: 1px solid #2a3550;
-                border-radius: 14px;
-            }
-
-            QLabel#cardTitle {
-                color: #71b0ff;
-                font-size: 13px;
-                font-weight: 700;
-            }
-
-            QLabel#cardValue {
-                color: white;
-                font-size: 24px;
-                font-weight: 800;
-            }
-
-            QProgressBar#cardProgress {
-                background-color: #0e131b;
-                border: 1px solid #243043;
-                border-radius: 5px;
-            }
-
-            QProgressBar#cardProgress::chunk {
-                background-color: #4da3ff;
-                border-radius: 4px;
-            }
-
-            QFrame#beamCard {
-                background-color: rgba(15, 23, 42, 0.55);
-                border: 1px solid #223250;
-                border-radius: 14px;
-            }
-
-            QLabel#beamImageLabel {
-                background: transparent;
-                border: none;
-                padding: 4px;
-                color: #cbd5e1;
-            }
-
-            QPushButton#skycivLinkButton {
-                background: transparent;
-                border: none;
-                color: #4ea1ff;
-                font-size: 15px;
-                font-weight: 600;
-                padding: 6px 10px;
-            }
-
-            QPushButton#skycivLinkButton:hover {
-                color: #7cc0ff;
-                text-decoration: underline;
-            }
-        """)
-
-        central = QWidget()
-        self.setCentralWidget(central)
-
-        root = QVBoxLayout(central)
-        root.setContentsMargins(20, 20, 20, 20)
-        root.setSpacing(16)
-
-        root.addLayout(self._build_header())
-        root.addWidget(self._build_center(), 1)
-        root.addLayout(self._build_footer())
-
-        self.card_r1.set_value(INITIAL_R1_VALUE)
-        self.card_r1.set_gauge_value(0.0)
-
-        self.card_r2.set_value(INITIAL_R2_VALUE)
-        self.card_r2.set_gauge_value(0.0)
-
-        if self.card_flex is not None:
-            self.card_flex.set_value(INITIAL_FLEX_VALUE)
-            self.card_flex.set_gauge_value(0.0)
-
-        self.card_status.set_value(INITIAL_STATUS_VALUE)
+    def __init__(self, model):
+        super().__init__(); self.model = model
+        self.setWindowTitle("Door Controller · Modo simulado")
+        self.resize(1400, 900); self.setMinimumSize(1080, 720); self._apply_style()
+        central = QWidget(); self.setCentralWidget(central)
+        root = QVBoxLayout(central); root.setContentsMargins(20, 16, 20, 18); root.setSpacing(14)
+        root.addWidget(self._build_header())
+        self.tabs = QTabWidget()
+        self.tabs.addTab(self._scroll(self._build_operation()), "  OPERACIÓN  ")
+        self.tabs.addTab(self._scroll(self._build_diagnostics()), "  DIAGNÓSTICO Y PID  ")
+        self.tabs.addTab(self._scroll(self._build_configuration()), "  CONFIGURACIÓN GENERAL  ")
+        root.addWidget(self.tabs, 1)
 
     def _build_header(self):
-        layout = QHBoxLayout()
-        layout.setSpacing(14)
-
-        left_layout = QHBoxLayout()
-        left_layout.setSpacing(14)
-
-        logo_label = QLabel()
-        logo_label.setObjectName("logoBox")
-        logo_label.setFixedSize(150, 90)
-        logo_label.setAlignment(Qt.AlignCenter)
-
-        if LOGO_PATH.exists():
-            pixmap = QPixmap(str(LOGO_PATH))
-            scaled = pixmap.scaled(
-                150,
-                90,
-                Qt.KeepAspectRatio,
-                Qt.SmoothTransformation,
-            )
-            logo_label.setPixmap(scaled)
-        else:
-            logo_label.setText("LOGO")
-
-        left_layout.addWidget(logo_label)
-
-        titles_layout = QVBoxLayout()
-        titles_layout.setSpacing(2)
-
-        subtitle = QLabel(APP_SUBTITLE)
-        subtitle.setObjectName("subtitleLabel")
-
-        title = QLabel(APP_TITLE)
-        title.setObjectName("titleLabel")
-
-        titles_layout.addWidget(subtitle)
-        titles_layout.addWidget(title)
-        titles_layout.addStretch()
-
-        left_layout.addLayout(titles_layout)
-        left_layout.addStretch()
-
-        right_layout = QHBoxLayout()
-        right_layout.setSpacing(10)
-
-        self.github_button = QPushButton(BUTTON_GITHUB)
-        self.version_label = QLabel(APP_VERSION)
-
-        right_layout.addWidget(self.github_button)
-        right_layout.addWidget(self.version_label)
-
-        layout.addLayout(left_layout, 1)
-        layout.addLayout(right_layout)
-
-        return layout
-
-    def _build_center(self):
-        panel = QFrame()
-        panel.setObjectName("panelFrame")
-
-        main_layout = QVBoxLayout(panel)
-        main_layout.setContentsMargins(16, 16, 16, 16)
-        main_layout.setSpacing(16)
-
-        top_grid = QGridLayout()
-        top_grid.setHorizontalSpacing(16)
-        top_grid.setVerticalSpacing(16)
-
-        input_frame = self._build_input_panel()
-        output_frame = self._build_output_panel()
-
-        top_grid.addWidget(input_frame, 0, 0)
-        top_grid.addWidget(output_frame, 0, 1)
-
-        top_grid.setColumnStretch(0, 2)
-        top_grid.setColumnStretch(1, 3)
-
-        main_layout.addLayout(top_grid)
-
-        return panel
-
-    def _build_input_panel(self):
-        frame = QFrame()
-        frame.setObjectName("groupFrame")
-        frame.setMaximumWidth(520)
-
-        layout = QVBoxLayout(frame)
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(12)
-
-        title = QLabel(SECTION_INPUTS)
-        title.setObjectName("sectionTitle")
-        layout.addWidget(title)
-
-        layout.addLayout(self._input_row(LABEL_DISTANCE, DEFAULT_DISTANCE))
-        layout.addLayout(self._input_combo_row(LABEL_LOAD, LOAD_OPTIONS, DEFAULT_LOAD))
-        layout.addWidget(self._build_beam_section())
-        layout.addStretch()
-
+        frame = QFrame(); frame.setObjectName("header")
+        row = QHBoxLayout(frame); row.setContentsMargins(18, 12, 18, 12)
+        titles = QVBoxLayout(); title = QLabel("CONTROL DE PUERTA MOTORIZADA"); title.setObjectName("appTitle")
+        subtitle = QLabel("Operación por ciclos automáticos"); subtitle.setObjectName("muted")
+        titles.addWidget(title); titles.addWidget(subtitle); row.addLayout(titles); row.addStretch()
+        self.mode_combo = QComboBox(); self.mode_combo.addItems(["SIMULADO", "REAL"]); row.addWidget(self.mode_combo)
+        self.mode_badge = QLabel("●  MODO SIMULADO"); self.mode_badge.setObjectName("simBadge"); row.addWidget(self.mode_badge); row.addSpacing(10)
+        row.addWidget(QLabel("Puerto")); self.port_combo = QComboBox(); self.port_combo.addItems(["COM3 (simulado)", "COM4 (simulado)", "loop:// demo"]); row.addWidget(self.port_combo)
+        self.refresh_ports_button = QPushButton("Actualizar"); row.addWidget(self.refresh_ports_button)
+        self.connection_button = QPushButton("Conectar"); row.addWidget(self.connection_button)
+        self.connection_status = QLabel("DESCONECTADO"); self.connection_status.setObjectName("connectionOff"); row.addWidget(self.connection_status)
+        self.version_label = QLabel(self.model["identity"]["app_version"]); self.version_label.setObjectName("version"); row.addWidget(self.version_label)
         return frame
 
-    def _build_beam_section(self):
-        self.beam_card = QFrame()
-        self.beam_card.setObjectName("beamCard")
+    def _build_operation(self):
+        page = QWidget(); layout = QVBoxLayout(page); layout.setContentsMargins(4, 16, 4, 16); layout.setSpacing(14)
+        summary = QGridLayout(); self.angle_card = ValueCard("Posición angular actual", True); self.state_card = ValueCard("Estado general")
+        self.command_card = ValueCard("Último comando"); self.wait_card = ValueCard("open_wait_ms")
+        for i, card in enumerate((self.angle_card, self.state_card, self.command_card, self.wait_card)): summary.addWidget(card, 0, i)
+        layout.addLayout(summary)
+        body = QHBoxLayout(); body.setSpacing(14)
+        self.operation_position_widget = DoorPositionWidget()
+        self.operation_position_widget.set_interaction_enabled(False)
+        body.addWidget(self.operation_position_widget, 3)
+        controls_panel = panel(); controls = QVBoxLayout(controls_panel); controls.setContentsMargins(20, 18, 20, 18)
+        heading = QLabel("CONTROL PRINCIPAL"); heading.setObjectName("sectionTitle"); controls.addWidget(heading)
+        hint = QLabel("FWD y REW solicitan un ciclo completo. La animación es sólo una representación local del comando activo."); hint.setObjectName("muted"); hint.setWordWrap(True); controls.addWidget(hint)
+        self.fwd_button = QPushButton("FWD"); self.fwd_button.setObjectName("actionButton")
+        self.rew_button = QPushButton("REW"); self.rew_button.setObjectName("actionButton")
+        action_row = QHBoxLayout(); action_row.addWidget(self.fwd_button); action_row.addWidget(self.rew_button); controls.addLayout(action_row)
+        self.stop_button = QPushButton("■  STOP"); self.stop_button.setObjectName("stopButton"); controls.addWidget(self.stop_button)
+        controls.addStretch(); self.danger_label = QLabel(); self.danger_label.setObjectName("dangerIndicator"); self.danger_label.setWordWrap(True); controls.addWidget(self.danger_label)
+        body.addWidget(controls_panel, 2); layout.addLayout(body)
+        self.result_frame = QFrame(); self.result_frame.setObjectName("resultFrame"); result = QHBoxLayout(self.result_frame)
+        caption = QLabel("ÚLTIMO RESULTADO / ERROR"); caption.setObjectName("cardCaption"); result.addWidget(caption)
+        self.result_label = QLabel("—"); self.result_label.setObjectName("resultText"); self.result_label.setWordWrap(True); result.addWidget(self.result_label, 1); layout.addWidget(self.result_frame)
+        return page
 
-        beam_layout = QVBoxLayout(self.beam_card)
-        beam_layout.setContentsMargins(12, 12, 12, 12)
-        beam_layout.setSpacing(10)
+    def _build_diagnostics(self):
+        page = QWidget(); layout = QVBoxLayout(page); layout.setContentsMargins(4, 16, 4, 16); layout.setSpacing(14)
+        notice = QLabel("DIAGNÓSTICO · POS_1 y POS_3 abiertas · POS_2 centro/reposo · sensor absoluto 0°–360°"); notice.setObjectName("notice"); notice.setWordWrap(True); layout.addWidget(notice)
+        top = QHBoxLayout(); top.setSpacing(14)
+        self.position_widget = DoorPositionWidget(); top.addWidget(self.position_widget, 3)
+        positions_panel = panel(); positions = QVBoxLayout(positions_panel); positions.setContentsMargins(18, 16, 18, 16)
+        title = QLabel("POSICIONES Y MOVIMIENTO"); title.setObjectName("sectionTitle"); positions.addWidget(title)
+        self.position_value_labels = {}
+        for key, text in (("pos1_deg", "POS_1 · abierta"), ("pos2_deg", "POS_2 · centro/reposo"), ("pos3_deg", "POS_3 · abierta")):
+            label = QLabel(); label.setObjectName("positionReadout"); self.position_value_labels[key] = label; positions.addWidget(label)
+        self.pos_buttons = {}
+        for pos in ("POS_1", "POS_2", "POS_3"):
+            button = QPushButton(f"Ir a {pos}"); button.setObjectName("diagButton"); self.pos_buttons[pos] = button; positions.addWidget(button)
+        self.diag_stop_button = QPushButton("■  STOP"); self.diag_stop_button.setObjectName("stopButton"); positions.addWidget(self.diag_stop_button); positions.addStretch()
+        recovery = QLabel("Después de STOP: Ir a POS_2 recupera el estado READY."); recovery.setObjectName("recovery"); recovery.setWordWrap(True); positions.addWidget(recovery); top.addWidget(positions_panel, 2); layout.addLayout(top)
 
-        self.beam_image_label = QLabel()
-        self.beam_image_label.setObjectName("beamImageLabel")
-        self.beam_image_label.setAlignment(Qt.AlignCenter)
-        self.beam_image_label.setMinimumHeight(220)
+        metrics = QGridLayout(); self.metric_cards = {}
+        for index, key in enumerate(("travel", "setpoint", "error", "abs_error", "arrival_tol", "pwm_cmd")):
+            card = ValueCard(key); self.metric_cards[key] = card; metrics.addWidget(card, index//3, index%3)
+        layout.addLayout(metrics)
+        pid_panel = panel(); pid_layout = QVBoxLayout(pid_panel); pid_layout.setContentsMargins(18, 16, 18, 16)
+        pid_title = QLabel("PID Y PARÁMETROS DE MOVIMIENTO · MODELO SIMULADO"); pid_title.setObjectName("sectionTitle"); pid_layout.addWidget(pid_title)
+        pid_grid = QGridLayout(); self.pid_inputs = {}
+        for index, key in enumerate(self.model["pid"]):
+            field = QLineEdit(); self.pid_inputs[key] = field
+            label = QLabel(key); label.setObjectName("fieldLabel"); pid_grid.addWidget(label, (index//4)*2, index%4); pid_grid.addWidget(field, (index//4)*2+1, index%4)
+        pid_layout.addLayout(pid_grid); self.apply_pid_button = QPushButton("Aplicar PID al modelo simulado"); self.apply_pid_button.setObjectName("secondaryButton"); pid_layout.addWidget(self.apply_pid_button, alignment=Qt.AlignRight)
+        layout.addWidget(pid_panel)
+        return page
 
-        pixmap = QPixmap(str(BEAM_DIAGRAM_PATH))
-        if not pixmap.isNull():
-            scaled = pixmap.scaled(
-                430,
-                230,
-                Qt.KeepAspectRatio,
-                Qt.SmoothTransformation,
-            )
-            self.beam_image_label.setPixmap(scaled)
+    def _build_configuration(self):
+        page = QWidget(); layout = QVBoxLayout(page); layout.setContentsMargins(4, 16, 4, 16); layout.setSpacing(14)
+        notice = QLabel("CONFIGURACIÓN LOCAL · Leer, Aplicar y Restaurar operan sólo sobre el modelo JSON cargado en memoria."); notice.setObjectName("notice"); notice.setWordWrap(True); layout.addWidget(notice)
+        config_panel = panel(); form = QFormLayout(config_panel); form.setContentsMargins(24, 22, 24, 22); form.setHorizontalSpacing(28); form.setVerticalSpacing(13)
+        self.config_inputs = {}
+        for key in ("open_wait_ms", "danger_time_ms", "led_blink_ms", "log_level", "st_mode"):
+            field = QLineEdit(); self.config_inputs[key] = field; form.addRow(key, field)
+        self.led_enabled_input = QCheckBox("LED habilitado"); self.config_inputs["led_enabled"] = self.led_enabled_input; form.addRow("led_enabled", self.led_enabled_input)
+        motion_info = QLabel(); motion_info.setObjectName("readonlyValue"); self.motion_mode_info = motion_info; form.addRow("motion_mode (informativo)", motion_info)
+        layout.addWidget(config_panel)
+        actions = QHBoxLayout(); self.read_config_button = QPushButton("Leer"); self.apply_config_button = QPushButton("Aplicar"); self.apply_config_button.setObjectName("actionButton")
+        self.restore_config_button = QPushButton("Restaurar"); self.factory_reset_button = QPushButton("Factory reset simulado"); self.factory_reset_button.setObjectName("dangerOutline")
+        for button in (self.read_config_button, self.apply_config_button, self.restore_config_button): actions.addWidget(button)
+        actions.addStretch(); actions.addWidget(self.factory_reset_button); layout.addLayout(actions)
+        self.config_feedback = QLabel(); self.config_feedback.setObjectName("feedback"); self.config_feedback.setWordWrap(True); layout.addWidget(self.config_feedback); layout.addStretch()
+        return page
+
+    def render(self, model, connected, danger_flash=False):
+        state, telemetry, positions, config, sim = model["state"], model["telemetry"], model["positions"], model["configuration"], model["simulation"]
+        device_state = state["device_state"]
+        auto_tolerance = float(model["pid"]["auto_tolerance_deg"])
+        centered = abs(self._angular_delta(telemetry["current_angle_deg"], positions["pos2_deg"])) <= auto_tolerance
+        active_states = {"FWD_ACTIVE", "REW_ACTIVE", "GO_POS1_ACTIVE", "GO_POS2_ACTIVE", "GO_POS3_ACTIVE"}
+        movement_active = sim["presentation_state"] in active_states
+        confirmed_ready = device_state == ("READY" if self.mode_combo.currentText() == "REAL" else "DEV_READY")
+        position_allows_cycle = True if self.mode_combo.currentText() == "REAL" else centered
+        can_start_product_cycle = connected and confirmed_ready and position_allows_cycle and not movement_active
+        self.fwd_button.setEnabled(can_start_product_cycle); self.rew_button.setEnabled(can_start_product_cycle)
+        self.stop_button.setEnabled(connected and movement_active); self.diag_stop_button.setEnabled(connected and movement_active)
+        for button in self.pos_buttons.values(): button.setEnabled(connected and device_state not in ("DEV_DANGER", "DANGER"))
+        self.angle_card.value.setText(f'{telemetry["current_angle_deg"]:.2f}°'); self.state_card.value.setText(STATE_LABELS.get(device_state, device_state))
+        self.command_card.value.setText(state["last_command"]); self.wait_card.value.setText(f'{config["open_wait_ms"]} ms')
+        self.operation_position_widget.set_positions(positions["pos1_deg"], positions["pos2_deg"], positions["pos3_deg"])
+        operation_setpoint = telemetry["setpoint"] if telemetry.get("setpoint") is not None else telemetry["current_angle_deg"]
+        self.operation_position_widget.set_telemetry(telemetry["current_angle_deg"], operation_setpoint,
+                                                     telemetry.get("rotation_direction", "NONE"), telemetry["arrival_tol"])
+        local_presentation = sim["presentation_state"]
+        self.operation_position_widget.set_presentation_state(local_presentation)
+        confirmed = state["danger_confirmed"] or device_state == "DEV_DANGER"
+        self.danger_label.setText("DANGER CONFIRMADO" if confirmed else "DANGER · sin confirmar")
+        self.danger_label.setProperty("confirmed", confirmed and danger_flash); self._repolish(self.danger_label)
+        result = state["last_result"]
+        if result.get("reason"):
+            self.result_label.setText(f'ERROR · reason = {result["reason"]}'); self.result_frame.setProperty("error", True)
         else:
-            self.beam_image_label.setText("Imagen no disponible")
+            self.result_label.setText(result.get("message", "Sin errores")); self.result_frame.setProperty("error", False)
+        self._repolish(self.result_frame)
+        self.position_widget.set_positions(positions["pos1_deg"], positions["pos2_deg"], positions["pos3_deg"])
+        self.position_widget.set_telemetry(telemetry["travel"], telemetry["setpoint"], telemetry["rotation_direction"], telemetry["arrival_tol"])
+        self.position_widget.set_presentation_state(local_presentation)
+        for key in self.position_value_labels: self.position_value_labels[key].setText(f'{key.upper()}  ·  {positions[key]:.2f}°')
+        for key, card in self.metric_cards.items(): card.value.setText(f'{telemetry[key]:.2f}' + ("°" if key != "pwm_cmd" else ""))
+        self.motion_mode_info.setText(str(model["pid"]["motion_mode"]))
 
-        self.skyciv_link = QPushButton("🔗 Calcular en SkyCiv")
-        self.skyciv_link.setObjectName("skycivLinkButton")
-        self.skyciv_link.setCursor(QCursor(Qt.PointingHandCursor))
-        self.skyciv_link.setFlat(True)
+    def populate_pid(self, pid):
+        for key, value in pid.items(): self.pid_inputs[key].setText(str(value))
 
-        beam_layout.addWidget(self.beam_image_label)
-        beam_layout.addWidget(self.skyciv_link, alignment=Qt.AlignHCenter)
+    def populate_configuration(self, config):
+        for key, widget in self.config_inputs.items():
+            widget.setChecked(bool(config[key])) if key == "led_enabled" else widget.setText(str(config[key]))
 
-        return self.beam_card
+    def set_connected(self, connected):
+        self.connection_button.setText("Desconectar" if connected else "Conectar"); self.connection_status.setText("CONECTADO · SIM" if connected else "DESCONECTADO")
+        self.connection_status.setObjectName("connectionOn" if connected else "connectionOff"); self._repolish(self.connection_status)
+        self.port_combo.setEnabled(not connected); self.mode_combo.setEnabled(not connected); self.refresh_ports_button.setEnabled(not connected)
 
-    def _build_output_panel(self):
-        frame = QFrame()
-        frame.setObjectName("groupFrame")
+    def set_mode(self, real_mode):
+        self.mode_badge.setText("●  MODO REAL" if real_mode else "●  MODO SIMULADO")
+        self.mode_badge.setObjectName("realBadge" if real_mode else "simBadge")
+        self._repolish(self.mode_badge)
 
-        layout = QVBoxLayout(frame)
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(12)
+    @staticmethod
+    def _angular_delta(a, b): return (b-a+180.0)%360.0-180.0
+    @staticmethod
+    def _repolish(widget): widget.style().unpolish(widget); widget.style().polish(widget)
+    @staticmethod
+    def _scroll(widget):
+        scroll = QScrollArea(); scroll.setWidgetResizable(True); scroll.setFrameShape(QFrame.NoFrame); scroll.setWidget(widget); return scroll
 
-        title = QLabel(SECTION_OUTPUTS)
-        title.setObjectName("sectionTitle")
-        layout.addWidget(title)
-
-        cards_grid = QGridLayout()
-        cards_grid.setHorizontalSpacing(12)
-        cards_grid.setVerticalSpacing(12)
-
-        self.card_r1 = OutputCard(
-            CARD_R1_TITLE,
-            INITIAL_R1_VALUE,
-            0,
-            gauge=True,
-            gauge_min=REACTION_GAUGE_MIN,
-            gauge_max=REACTION_GAUGE_MAX,
-            gauge_value=REACTION_GAUGE_INITIAL,
-            gauge_unit=UNIT_FORCE,
-            gauge_decimals=1,
-            gauge_accent="#4da3ff",
-        )
-
-        self.card_r2 = OutputCard(
-            CARD_R2_TITLE,
-            INITIAL_R2_VALUE,
-            0,
-            gauge=True,
-            gauge_min=REACTION_GAUGE_MIN,
-            gauge_max=REACTION_GAUGE_MAX,
-            gauge_value=REACTION_GAUGE_INITIAL,
-            gauge_unit=UNIT_FORCE,
-            gauge_decimals=1,
-            gauge_accent="#67d4ff",
-        )
-
-        self.card_status = OutputCard(
-            CARD_STATUS_TITLE,
-            INITIAL_STATUS_VALUE,
-            100,
-            gauge=False,
-        )
-
-        self.card_status.set_percent(33)
-        self.card_status.set_progress_color("#808080")
-
-        cards_grid.addWidget(self.card_r1, 0, 0)
-        cards_grid.addWidget(self.card_r2, 0, 1)
-
-        if SHOW_FLEX_SECTION:
-            self.card_flex = OutputCard(
-                CARD_FLEX_TITLE,
-                INITIAL_FLEX_VALUE,
-                0,
-                gauge=True,
-                gauge_min=0,
-                gauge_max=20,
-                gauge_value=0,
-                gauge_unit=UNIT_FLEX,
-                gauge_decimals=2,
-                gauge_accent="#7aa2ff",
-            )
-            cards_grid.addWidget(self.card_flex, 1, 0)
-            cards_grid.addWidget(self.card_status, 1, 1)
-        else:
-            self.card_flex = None
-            cards_grid.addWidget(self.card_status, 1, 0, 1, 2)
-
-        layout.addLayout(cards_grid)
-        layout.addStretch()
-
-        return frame
-
-    def _build_footer(self):
-        layout = QHBoxLayout()
-        layout.setSpacing(10)
-
-        puerto_label = QLabel(LABEL_PORT)
-        self.puerto_combo = QComboBox()
-        self.puerto_combo.addItems(SERIAL_PORT_OPTIONS)
-        if DEFAULT_SERIAL_PORT:
-            self.puerto_combo.setCurrentText(DEFAULT_SERIAL_PORT)
-        self.puerto_combo.setFixedWidth(120)
-
-        self.btn_actualizar = QPushButton(BUTTON_REFRESH_PORTS)
-        self.btn_conectar = QPushButton(BUTTON_CONNECT)
-        self.btn_desconectar = QPushButton(BUTTON_DISCONNECT)
-        self.btn_desconectar.setEnabled(False)
-
-        self.btn_iniciar = QPushButton(BUTTON_START)
-        self.btn_refrescar = QPushButton(BUTTON_REFRESH)
-
-        self.btn_iniciar.setObjectName("primaryButton")
-        self.btn_refrescar.setObjectName("successButton")
-
-        self.status_label = QLabel(STATUS_GUI_ONLY)
-        self.status_label.setObjectName("statusLabel")
-
-        layout.addWidget(puerto_label)
-        layout.addWidget(self.puerto_combo)
-        layout.addSpacing(12)
-        layout.addWidget(self.btn_actualizar)
-        layout.addWidget(self.btn_conectar)
-        layout.addWidget(self.btn_desconectar)
-        layout.addWidget(self.btn_iniciar)
-        layout.addWidget(self.btn_refrescar)
-        layout.addStretch()
-        layout.addWidget(self.status_label)
-
-        return layout
-
-    def _input_row(self, label_text, default_value):
-        row = QHBoxLayout()
-        row.setSpacing(10)
-
-        label = QLabel(f"{label_text}:")
-        label.setObjectName("inputLabel")
-        label.setMinimumWidth(150)
-
-        field = QLineEdit()
-        field.setText(default_value)
-        field.setMaximumWidth(220)
-
-        if label_text == LABEL_DISTANCE:
-            self.distance_input = field
-
-        row.addWidget(label)
-        row.addWidget(field)
-        row.addStretch()
-
-        return row
-
-    def _input_combo_row(self, label_text, values, default_value):
-        row = QHBoxLayout()
-        row.setSpacing(10)
-
-        label = QLabel(f"{label_text}:")
-        label.setObjectName("inputLabel")
-        label.setMinimumWidth(150)
-
-        combo = QComboBox()
-        combo.addItems(values)
-        combo.setCurrentText(default_value)
-        combo.setMaximumWidth(220)
-
-        if label_text == LABEL_LOAD:
-            self.load_combo = combo
-
-        row.addWidget(label)
-        row.addWidget(combo)
-        row.addStretch()
-
-        return row
+    def _apply_style(self):
+        self.setStyleSheet("""
+            QMainWindow, QWidget { background: #0d1119; color: #eef3f8; font-family: 'Segoe UI'; font-size: 13px; }
+            QFrame#header, QFrame#panel { background: #121a26; border: 1px solid #263449; border-radius: 14px; }
+            QLabel#appTitle { font-size: 21px; font-weight: 800; letter-spacing: 1px; } QLabel#muted, QLabel#version { color: #91a0b5; }
+            QLabel#simBadge { background: #4b3510; color: #ffd66b; border: 1px solid #936c1f; border-radius: 9px; padding: 8px 12px; font-weight: 800; }
+            QLabel#realBadge { background: #123b2b; color: #70e6aa; border: 1px solid #297653; border-radius: 9px; padding: 8px 12px; font-weight: 800; }
+            QLabel#connectionOff { color: #9aa6b5; font-weight: 800; padding: 7px; } QLabel#connectionOn { color: #63e6a3; font-weight: 800; padding: 7px; }
+            QComboBox, QLineEdit, QPushButton { background: #1b2636; border: 1px solid #3a4c64; border-radius: 9px; padding: 9px 12px; color: white; font-weight: 650; }
+            QLineEdit:focus { border-color: #58a6e7; } QPushButton:hover { background: #26364c; border-color: #66a8ff; } QPushButton:disabled { color: #5c6878; background: #151b24; border-color: #252e3b; }
+            QPushButton#actionButton { min-height: 48px; background: #174a72; border-color: #3b91d1; font-size: 15px; } QPushButton#secondaryButton { background: #173c52; border-color: #2c718f; }
+            QPushButton#stopButton { min-height: 48px; background: #8e1723; border: 2px solid #ff5968; font-size: 17px; font-weight: 900; } QPushButton#stopButton:disabled { background: #37191e; border-color: #64313a; color: #8d6970; }
+            QPushButton#dangerOutline { color: #ff8691; border-color: #93333d; } QPushButton#diagButton { min-height: 38px; }
+            QTabWidget::pane { border: 0; } QTabBar::tab { background: #131b27; color: #91a0b5; padding: 12px 26px; margin-right: 4px; border-radius: 8px; font-weight: 800; } QTabBar::tab:selected { color: white; background: #23598f; }
+            QFrame#valueCard { background: #172231; border: 1px solid #2b3b50; border-radius: 11px; min-height: 70px; } QLabel#cardCaption { color: #7f91a9; font-size: 11px; font-weight: 800; } QLabel#cardValue { font-size: 18px; font-weight: 800; } QLabel#accentValue { color: #6fc6ff; font-size: 27px; font-weight: 900; }
+            QLabel#sectionTitle { color: #8ecaff; font-size: 14px; font-weight: 900; } QLabel#fieldLabel { color: #8b9bb0; font-size: 11px; } QLabel#positionReadout { background: #172231; border-radius: 7px; padding: 8px; font-weight: 700; }
+            QFrame#resultFrame { background: #14261f; border: 1px solid #286447; border-radius: 11px; } QFrame#resultFrame[error='true'] { background: #351319; border: 1px solid #b93645; } QLabel#resultText { padding: 9px; font-weight: 700; }
+            QLabel#dangerIndicator { background: #1a222e; color: #75859a; border-radius: 8px; padding: 10px; font-weight: 900; } QLabel#dangerIndicator[confirmed='true'] { background: #a51625; color: white; }
+            QLabel#notice { background: #172b35; color: #9cdbea; border-left: 4px solid #48aabe; padding: 12px; font-weight: 700; } QLabel#recovery { background: #282517; color: #f3d878; border-radius: 8px; padding: 10px; font-weight: 700; }
+            QLabel#readonlyValue { color: #8ecaff; font-weight: 800; } QLabel#feedback { background: #172231; border-radius: 8px; padding: 12px; color: #9cdbea; } QScrollArea { border: none; }
+        """)

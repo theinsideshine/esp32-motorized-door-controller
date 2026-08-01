@@ -20,7 +20,7 @@
 /*
   ============================================================
   PROYECTO: ESP32 MOTORIZED DOOR CONTROLLER
-  VERSION: v5.2b-danger-button-fsm
+  VERSION: v5.2c-runtime-events
   ============================================================
 
   ALCANCE ACTUAL
@@ -81,7 +81,7 @@
 // VERSION
 // ============================================================
 
-#define APP_VERSION "v5.2b-danger-button-fsm"
+#define APP_VERSION "v5.2c-runtime-events"
 
 // ============================================================
 // PINES
@@ -530,11 +530,17 @@ void handleDoorMotionCompletion() {
   bool success = DoorMotion.completion_succeeded();
   const char* reason = DoorMotion.completion_reason();
   DeviceState completedState = deviceState;
+  DemoCycleKind completedCycle = activeDemoCycle;
+  uint8_t completedDiagnosticTargetPos = diagnosticTargetPos;
   bool completedLedSim = ledSimActive;
+  float finalDeg = completedLedSim ? readLedSimDeg() : DoorSensor.deg();
 
   DoorMotion.clear_completion_event();
 
   if (completedLedSim) {
+    uint8_t completedLedSimTargetPos = ledSimToPos;
+    float targetDeg = Config.get_pos_deg(completedLedSimTargetPos);
+
     ledSimActive = false;
 
     // Un stop durante led-sim deja el equipo detenido, igual que cualquier
@@ -550,6 +556,17 @@ void handleDoorMotionCompletion() {
       setDeviceStopped(reason);
     }
 
+    Config.send_runtime_completion_event(
+      "motion-complete",
+      "led-sim",
+      completedLedSimTargetPos,
+      success,
+      reason,
+      deviceStateName(),
+      finalDeg,
+      targetDeg
+    );
+
     return;
   }
 
@@ -560,32 +577,87 @@ void handleDoorMotionCompletion() {
       } else {
         setDeviceStopped(reason);
       }
+
+      Config.send_runtime_completion_event(
+        "motion-complete",
+        "boot-center",
+        2,
+        success,
+        reason,
+        deviceStateName(),
+        finalDeg,
+        Config.get_pos2_deg()
+      );
       break;
 
     case DEV_OPENING_FWD:
-    case DEV_OPENING_REW:
+    case DEV_OPENING_REW: {
+      const char* cycleCommand = completedState == DEV_OPENING_FWD ? "fwd" : "rew";
+      uint8_t targetPos = completedState == DEV_OPENING_FWD ? 1 : 3;
+
       if (success) {
         beginOpenWait();
       } else {
         setDeviceStopped(reason);
+
+        Config.send_runtime_completion_event(
+          "cycle-complete",
+          cycleCommand,
+          targetPos,
+          false,
+          reason,
+          deviceStateName(),
+          finalDeg,
+          Config.get_pos_deg(targetPos)
+        );
       }
       break;
+    }
 
-    case DEV_CLOSING_CENTER:
+    case DEV_CLOSING_CENTER: {
+      const char* cycleCommand = completedCycle == DEMO_CYCLE_FWD ? "fwd" : "rew";
+
       if (success) {
         setDeviceReady(reason);
       } else {
         setDeviceStopped(reason);
       }
-      break;
 
-    case DEV_DIAGNOSTIC_POSITIONING:
-      if (success && diagnosticTargetPos == 2 && isNormalExecutionMode()) {
+      Config.send_runtime_completion_event(
+        "cycle-complete",
+        cycleCommand,
+        2,
+        success,
+        reason,
+        deviceStateName(),
+        finalDeg,
+        Config.get_pos2_deg()
+      );
+      break;
+    }
+
+    case DEV_DIAGNOSTIC_POSITIONING: {
+      uint8_t targetPos = completedDiagnosticTargetPos;
+      float targetDeg = Config.get_pos_deg(targetPos);
+
+      if (success && targetPos == 2 && isNormalExecutionMode()) {
         setDeviceReady(reason);
       } else {
         setDeviceStopped(reason);
       }
+
+      Config.send_runtime_completion_event(
+        "motion-complete",
+        "go",
+        targetPos,
+        success,
+        reason,
+        deviceStateName(),
+        finalDeg,
+        targetDeg
+      );
       break;
+    }
 
     case DEV_STOPPED:
       // El host cancelo el ciclo mientras DoorMotion terminaba SETTLING.
@@ -917,9 +989,22 @@ void setup() {
   }
 
   initializeDeviceFsm();
+
+  Config.set_runtime_status(deviceStateName(), DoorSensor.deg());
 }
 
 void loop() {
+  // Antes de responder info/all-params se toma una lectura fresca cuando
+  // el posicionamiento no esta usando el sensor en su propio periodo.
+  if (Serial.available() > 0 && !DoorMotion.is_active() && !ledSimActive) {
+    readSensorDegMeasured(false);
+  }
+
+  Config.set_runtime_status(
+    deviceStateName(),
+    ledSimActive ? readLedSimDeg() : DoorSensor.deg()
+  );
+
   Config.host_cmd();
   syncLogLevel();
   processHostRequest();

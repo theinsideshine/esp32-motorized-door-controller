@@ -32,10 +32,13 @@ tag    v5.1e-validated-defaults
 Versión de esta evolución:
 
 ```text
-v5.2b-danger-button-fsm
+v5.2c-runtime-events
 ```
 
-La versión conserva la FSM superior de demo y agrega un estado `DANGER` por pulsador. El evento se acepta solamente en `DEV_READY`, con la puerta centrada en POS_2; activa rojo intermitente durante un tiempo configurable y vuelve a `READY`. No cambia pines, PID, `motion_mode`, lógica fina de movimiento ni `beam_app`.
+La versión conserva la FSM superior de demo y el estado `DANGER`, y agrega
+eventos JSON de finalización para que la aplicación desktop pueda distinguir
+un `ack` de inicio de la finalización real del movimiento o ciclo. También
+expone `device_state` y `current_deg` en `all-params`.
 
 ---
 
@@ -424,6 +427,26 @@ factory-reset carga y guarda todos los defaults.
 {"cmd":"go","pos":3}
 {"cmd":"stop"}
 ```
+
+El `ack` confirma solamente que el pedido fue recibido. Al finalizar el
+movimiento se emite un evento JSON separado:
+
+```json
+{
+  "event":"motion-complete",
+  "cmd":"go",
+  "pos":2,
+  "result":"ok",
+  "reason":"posicion_alcanzada",
+  "device_state":"READY",
+  "final_deg":287.01,
+  "target_deg":291.23
+}
+```
+
+Los ciclos `fwd` y `rew` emiten `event:"cycle-complete"` al terminar el
+regreso a POS_2 o al fallar. `all-params` incluye además `device_state` y
+`current_deg` para sincronizar la aplicación al conectar.
 
 ### Simulación LED/movimiento lógico
 
