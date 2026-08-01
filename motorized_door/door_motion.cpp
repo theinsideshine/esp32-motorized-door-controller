@@ -27,6 +27,10 @@ CDoorMotion::CDoorMotion()
   finishReason = "ninguna";
   finishWasCancel = false;
 
+  completionPending = false;
+  completionSuccess = false;
+  completionReason = "ninguna";
+
   sampleTimingStarted = false;
 
   samples = 0;
@@ -47,7 +51,6 @@ CDoorMotion::CDoorMotion()
 
   cb.read_sensor_deg = nullptr;
   cb.get_last_sensor_read_us = nullptr;
-  cb.is_fc_l_active = nullptr;
   cb.motor_right_continuous = nullptr;
   cb.motor_left_continuous = nullptr;
   cb.stop_motor_output_only = nullptr;
@@ -61,13 +64,13 @@ void CDoorMotion::begin(CDoorConfig* config, const DoorMotionCallbacks& callback
   ready = (cfg != nullptr) &&
           (cb.read_sensor_deg != nullptr) &&
           (cb.get_last_sensor_read_us != nullptr) &&
-          (cb.is_fc_l_active != nullptr) &&
           (cb.motor_right_continuous != nullptr) &&
           (cb.motor_left_continuous != nullptr) &&
           (cb.stop_motor_output_only != nullptr);
 
   direction = DOOR_MOTION_DIR_NONE;
   state = DOOR_MOTION_IDLE;
+  clear_completion_event();
 }
 
 bool CDoorMotion::start(float requestedTargetDeg, const char* requestedTargetName)
@@ -84,6 +87,7 @@ bool CDoorMotion::start(float requestedTargetDeg, const char* requestedTargetNam
 
   pendingTargetDeg = normalize360(requestedTargetDeg);
   pendingTargetName = requestedTargetName;
+  clear_completion_event();
 
   state = DOOR_MOTION_START;
   return true;
@@ -110,7 +114,7 @@ void CDoorMotion::update()
 
     case DOOR_MOTION_HOLDING:
       // Reservado para futura etapa con mantenimiento de posicion.
-      // En v4.1c motion_mode=2 llega y corta; todavia no entra en HOLDING.
+      // motion_mode=2 llega y corta; todavia no entra en HOLDING.
       break;
 
     case DOOR_MOTION_IDLE:
@@ -141,6 +145,7 @@ void CDoorMotion::cancel(const char* reason)
     cb.stop_motor_output_only();
     direction = DOOR_MOTION_DIR_NONE;
     state = DOOR_MOTION_IDLE;
+    publish_completion(reason, false);
   }
 }
 
@@ -169,6 +174,28 @@ bool CDoorMotion::is_settling() const
 bool CDoorMotion::is_holding() const
 {
   return state == DOOR_MOTION_HOLDING;
+}
+
+bool CDoorMotion::has_completion_event() const
+{
+  return completionPending;
+}
+
+bool CDoorMotion::completion_succeeded() const
+{
+  return completionPending && completionSuccess;
+}
+
+const char* CDoorMotion::completion_reason() const
+{
+  return completionReason;
+}
+
+void CDoorMotion::clear_completion_event()
+{
+  completionPending = false;
+  completionSuccess = false;
+  completionReason = "ninguna";
 }
 
 void CDoorMotion::set_debug(bool enabled)
@@ -608,6 +635,13 @@ void CDoorMotion::cancel_now(const char* reason, float currentDeg, float errorDe
   enter_settling(reason, true, currentDeg, errorDeg);
 }
 
+void CDoorMotion::publish_completion(const char* reason, bool success)
+{
+  completionReason = reason == nullptr ? "sin_reason" : reason;
+  completionSuccess = success;
+  completionPending = true;
+}
+
 void CDoorMotion::complete_settling_if_ready()
 {
   if (state != DOOR_MOTION_SETTLING) {
@@ -630,9 +664,10 @@ void CDoorMotion::complete_settling_if_ready()
 
   direction = DOOR_MOTION_DIR_NONE;
 
-  // v4.1c: incluso en motion_mode=2 el flujo sigue siendo llegar y cortar.
-  // HOLDING queda preparado para la proxima etapa, pero todavia no se activa.
+  // v5.2a: incluso en motion_mode=2 el flujo sigue siendo llegar y cortar.
+  // HOLDING queda preparado para una etapa futura, pero todavia no se activa.
   state = DOOR_MOTION_IDLE;
+  publish_completion(finishReason, !finishWasCancel);
 }
 
 void CDoorMotion::start_step()
@@ -707,6 +742,7 @@ void CDoorMotion::start_step()
     state = DOOR_MOTION_IDLE;
 
     print_summary("ya_en_posicion", startDeg, startErrorDeg);
+    publish_completion("ya_en_posicion", true);
     return;
   }
 
@@ -772,11 +808,6 @@ void CDoorMotion::moving_step()
 
   decisionDeg = currentDeg;
   decisionErrorDeg = errorDeg;
-
-  if (cb.is_fc_l_active()) {
-    cancel_now("FC_L_ACTIVO", currentDeg, errorDeg);
-    return;
-  }
 
   if (runTimer.expired_ms(cfg->get_auto_max_run_ms())) {
     cancel_now("tiempo_maximo_alcanzado", currentDeg, errorDeg);

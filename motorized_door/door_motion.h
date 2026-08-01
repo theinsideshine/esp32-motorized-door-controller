@@ -49,7 +49,6 @@ enum DoorMotionState : uint8_t {
 struct DoorMotionCallbacks {
   float (*read_sensor_deg)(bool count_for_motion_stats);
   uint32_t (*get_last_sensor_read_us)();
-  bool (*is_fc_l_active)();
   void (*motor_right_continuous)(uint8_t pwm);
   void (*motor_left_continuous)(uint8_t pwm);
   void (*stop_motor_output_only)();
@@ -70,6 +69,12 @@ public:
   bool is_moving_or_starting() const;
   bool is_settling() const;
   bool is_holding() const;
+
+  // Evento de finalizacion consumible por la FSM superior.
+  bool has_completion_event() const;
+  bool completion_succeeded() const;
+  const char* completion_reason() const;
+  void clear_completion_event();
 
   void set_debug(bool enabled);
   bool get_debug() const;
@@ -113,6 +118,10 @@ private:
   const char* finishReason;
   bool finishWasCancel;
 
+  bool completionPending;
+  bool completionSuccess;
+  const char* completionReason;
+
   CTimer controlTimer;
   bool sampleTimingStarted;
 
@@ -149,6 +158,7 @@ private:
   void enter_settling(const char* reason, bool wasCancel, float currentDeg, float errorDeg);
   void finish_now(const char* reason, float currentDeg, float errorDeg);
   void cancel_now(const char* reason, float currentDeg, float errorDeg);
+  void publish_completion(const char* reason, bool success);
 
   void print_summary(const char* reason, float finalDeg, float finalErrorDeg);
 };

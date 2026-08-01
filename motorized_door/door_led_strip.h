@@ -19,6 +19,8 @@
     - IDLE: azul respiracion suave.
     - MOVING_FWD: verde desplazandose hacia adelante logico.
     - MOVING_RWD: verde desplazandose hacia atras logico.
+    - OPEN_WAIT: verde fijo durante la espera con puerta abierta.
+    - CLOSING_FWD/RWD: rojo desplazandose durante el cierre.
     - ARRIVED: pausa breve conservando ultimo cuadro antes de volver a IDLE.
     - ALARM: rojo intermitente.
     - ERROR: rojo/amarillo rapido.
@@ -30,6 +32,9 @@ enum LedStripState : uint8_t {
   LED_STRIP_IDLE,
   LED_STRIP_MOVING_FWD,
   LED_STRIP_MOVING_RWD,
+  LED_STRIP_OPEN_WAIT,
+  LED_STRIP_CLOSING_FWD,
+  LED_STRIP_CLOSING_RWD,
   LED_STRIP_ARRIVED,
   LED_STRIP_ALARM,
   LED_STRIP_ERROR
@@ -90,6 +95,8 @@ private:
 
   void render_idle();
   void render_moving(bool forward);
+  void render_open_wait();
+  void render_closing(bool forward);
   void render_arrived();
   void render_alarm();
   void render_error();

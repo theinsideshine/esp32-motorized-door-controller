@@ -93,6 +93,8 @@ void CDoorConfig::load_defaults()
 
   log_level = DOOR_LOG_LEVEL_DEFAULT;
   st_mode = DOOR_ST_MODE_NORMAL;
+  open_wait_ms = DOOR_OPEN_WAIT_MS_DEFAULT;
+  danger_time_ms = DOOR_DANGER_TIME_MS_DEFAULT;
 
   led_enabled = DOOR_LED_ENABLED_DEFAULT;
   led_count = DOOR_LED_COUNT_DEFAULT;
@@ -141,6 +143,8 @@ bool CDoorConfig::load_from_nvs()
 
   log_level = prefs.getUInt("log", DOOR_LOG_LEVEL_DEFAULT);
   st_mode = prefs.getUInt("mode", DOOR_ST_MODE_NORMAL);
+  open_wait_ms = sanitize_open_wait_ms(prefs.getUInt("openwait", DOOR_OPEN_WAIT_MS_DEFAULT));
+  danger_time_ms = sanitize_danger_time_ms(prefs.getUInt("dangertime", DOOR_DANGER_TIME_MS_DEFAULT));
 
   led_enabled = sanitize_bool01(prefs.getUInt("leden", DOOR_LED_ENABLED_DEFAULT));
   led_count = sanitize_led_count(prefs.getUInt("ledcnt", DOOR_LED_COUNT_DEFAULT));
@@ -262,6 +266,8 @@ void CDoorConfig::save_all()
 
   prefs.putUInt("log", log_level);
   prefs.putUInt("mode", st_mode);
+  prefs.putUInt("openwait", open_wait_ms);
+  prefs.putUInt("dangertime", danger_time_ms);
 
   prefs.putUInt("leden", led_enabled);
   prefs.putUInt("ledcnt", led_count);
@@ -425,6 +431,16 @@ uint32_t CDoorConfig::get_log_level() const
 uint32_t CDoorConfig::get_st_mode() const
 {
   return st_mode;
+}
+
+uint32_t CDoorConfig::get_open_wait_ms() const
+{
+  return open_wait_ms;
+}
+
+uint32_t CDoorConfig::get_danger_time_ms() const
+{
+  return danger_time_ms;
 }
 
 uint32_t CDoorConfig::get_led_enabled() const
@@ -772,6 +788,24 @@ void CDoorConfig::set_st_mode(uint32_t value)
   }
 }
 
+void CDoorConfig::set_open_wait_ms(uint32_t value)
+{
+  open_wait_ms = sanitize_open_wait_ms(value);
+
+  if (nvs_ready) {
+    prefs.putUInt("openwait", open_wait_ms);
+  }
+}
+
+void CDoorConfig::set_danger_time_ms(uint32_t value)
+{
+  danger_time_ms = sanitize_danger_time_ms(value);
+
+  if (nvs_ready) {
+    prefs.putUInt("dangertime", danger_time_ms);
+  }
+}
+
 void CDoorConfig::set_led_enabled(uint32_t value)
 {
   led_enabled = sanitize_bool01(value);
@@ -897,6 +931,24 @@ void CDoorConfig::set_pending_led_sim_request(uint8_t fromPos, uint8_t toPos, ui
   requested_from_position = fromPos;
   requested_to_position = toPos;
   requested_duration_ms = durationMs;
+}
+
+void CDoorConfig::send_runtime_command_result(const char* command,
+                                              bool accepted,
+                                              const char* reason,
+                                              const char* deviceState)
+{
+  StaticJsonDocument<256> doc;
+
+  doc["cmd"] = command == nullptr ? "" : command;
+  doc["result"] = accepted ? "ack" : "error";
+  doc["device_state"] = deviceState == nullptr ? "UNKNOWN" : deviceState;
+
+  if (!accepted && reason != nullptr && reason[0] != '\0') {
+    doc["reason"] = reason;
+  }
+
+  send_json(doc);
 }
 
 // ============================================================
@@ -1155,6 +1207,18 @@ void CDoorConfig::process_json(JsonDocument& doc)
     known_key = true;
   }
 
+  if (doc.containsKey("open_wait_ms")) {
+    set_open_wait_ms(doc["open_wait_ms"].as<uint32_t>());
+    doc["open_wait_ms"] = open_wait_ms;
+    known_key = true;
+  }
+
+  if (doc.containsKey("danger_time_ms")) {
+    set_danger_time_ms(doc["danger_time_ms"].as<uint32_t>());
+    doc["danger_time_ms"] = danger_time_ms;
+    known_key = true;
+  }
+
   // ----------------------------------------------------------
   // Info
   // ----------------------------------------------------------
@@ -1211,6 +1275,16 @@ void CDoorConfig::process_json(JsonDocument& doc)
     if (strcmp(key, "stop") == 0) {
       set_pending_request(DOOR_REQ_STOP, 0);
       send_ack(doc);
+      return;
+    }
+
+    if (strcmp(key, "fwd") == 0) {
+      set_pending_request(DOOR_REQ_FWD, 0);
+      return;
+    }
+
+    if (strcmp(key, "rew") == 0) {
+      set_pending_request(DOOR_REQ_REW, 0);
       return;
     }
 
@@ -1315,6 +1389,8 @@ void CDoorConfig::send_all_params()
 
   doc["log_level"] = log_level;
   doc["st_mode"] = st_mode;
+  doc["open_wait_ms"] = open_wait_ms;
+  doc["danger_time_ms"] = danger_time_ms;
 
   doc["pending_request"] = (uint8_t)pending_request;
   doc["requested_position"] = requested_position;
@@ -1512,3 +1588,20 @@ uint32_t CDoorConfig::sanitize_led_interval(uint32_t value, uint32_t defaultValu
   return value;
 }
 
+uint32_t CDoorConfig::sanitize_open_wait_ms(uint32_t value) const
+{
+  if (value > DOOR_OPEN_WAIT_MS_MAX) {
+    return DOOR_OPEN_WAIT_MS_MAX;
+  }
+
+  return value;
+}
+
+uint32_t CDoorConfig::sanitize_danger_time_ms(uint32_t value) const
+{
+  if (value > DOOR_DANGER_TIME_MS_MAX) {
+    return DOOR_DANGER_TIME_MS_MAX;
+  }
+
+  return value;
+}

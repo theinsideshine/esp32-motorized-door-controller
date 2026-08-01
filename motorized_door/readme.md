@@ -22,26 +22,20 @@ Branch de trabajo:
 wip/v5.1a-led-strip-fsm
 ```
 
-Base firmware validada:
+Baseline estable de partida:
 
 ```text
-commit 34cba8f  Validate v5.1c LED arrival soft transition
-tag    v5.1c-led-arrival-soft-transition
+commit 7883b25  Set validated defaults for new motor
+tag    v5.1e-validated-defaults
 ```
 
-Integración posterior del prototipo de aplicación:
+Versión de esta evolución:
 
 ```text
-commit 489a713  Add beam app prototype
+v5.2b-danger-button-fsm
 ```
 
-Versión propuesta después de actualizar los defaults compilados:
-
-```text
-v5.1e-validated-defaults
-```
-
-La versión agrega como defaults los valores ya validados con el motor N20 nuevo. No cambia pines, sentidos, protocolo JSON, lógica de movimiento ni FSM LED.
+La versión conserva la FSM superior de demo y agrega un estado `DANGER` por pulsador. El evento se acepta solamente en `DEV_READY`, con la puerta centrada en POS_2; activa rojo intermitente durante un tiempo configurable y vuelve a `READY`. No cambia pines, PID, `motion_mode`, lógica fina de movimiento ni `beam_app`.
 
 ---
 
@@ -50,7 +44,10 @@ La versión agrega como defaults los valores ya validados con el motor N20 nuevo
 El prototipo funciona actualmente con:
 
 ```text
-movimiento real hacia POS_1, POS_2 y POS_3
+centrado automático al arrancar en modo normal
+ciclo fwd: POS_2 -> POS_1 -> espera -> POS_2
+ciclo rew: POS_2 -> POS_3 -> espera -> POS_2
+movimiento directo hacia POS_1, POS_2 y POS_3
 sensor AS5048A por SPI
 control de posición durante MOVING
 sin HOLDING activo
@@ -94,7 +91,7 @@ DRV8833
 Motor N20 con reductora, VM=6 V
 Sensor absoluto AS5048A por SPI
 Tira WS2812B
-Final de carrera FC_L
+Pulsador DANGER
 Prototipo mecánico impreso en 3D
 ```
 
@@ -112,10 +109,11 @@ AS5048A SPI:
   SCK  = GPIO12
   MISO = GPIO13
 
-FC_L:
+Pulsador DANGER:
   GPIO14 con INPUT_PULLUP
   NORMAL = LOW
   ACTIVO = HIGH
+  Se atiende solamente en DEV_READY, con la puerta centrada en POS_2.
 
 WS2812B:
   DATA = GPIO6
@@ -142,10 +140,10 @@ LEFT  / FORWARD -> sube ángulo
 
 ```text
 motorized_door.ino
-  Coordinador del producto.
-  Procesa pedidos runtime.
-  Inyecta callbacks físicos.
-  Coordina DoorMotion, DoorMotor, DoorSensor y LedStrip.
+  Coordinador del producto y FSM superior.
+  BOOT, CENTERING, READY, OPENING, OPEN_WAIT, CLOSING, DANGER y STOPPED.
+  Crea los CTimer de espera y DANGER y consulta la copia RAM de CDoorConfig.
+  Procesa pedidos runtime e inyecta callbacks físicos.
 
 CDoorConfig
   Protocolo JSON por Serial.
@@ -157,6 +155,7 @@ CDoorMotion
   Máquina de estados de posicionamiento.
   START -> MOVING -> SETTLING -> IDLE.
   Llegada, cruce, timeout, stall, cancelación y summary.
+  Publica un evento final de éxito o cancelación para la FSM superior.
 
 CDoorMotor
   Abstracción del DRV8833.
@@ -172,11 +171,69 @@ CLedStrip
 CLog
   Mensajes humanos, JSON de diagnóstico y salida Arduino Plotter.
 
+CButton
+  Lectura y antirebote no bloqueante del pulsador mediante CTimer.
+  El objeto se crea en motorized_door.ino.
+
 CTimer
   Base temporal no bloqueante del firmware.
 ```
 
 `HOLDING` permanece reservado. El prototipo actual no tiene traba, solenoide, embrague ni mecanismo real de retención que permita validar ese estado de manera concluyente.
+
+---
+
+## FSM superior de demo
+
+En `st_mode=0`, el arranque usa la posición absoluta del AS5048A:
+
+```text
+BOOT
+  -> si ya está dentro de auto_tolerance_deg de POS_2: READY
+  -> si está fuera: CENTERING -> POS_2 -> READY
+```
+
+Ciclo `fwd`:
+
+```text
+READY -> OPENING_FWD -> POS_1 -> OPEN_WAIT -> CLOSING_CENTER -> POS_2 -> READY
+```
+
+Ciclo `rew`:
+
+```text
+READY -> OPENING_REW -> POS_3 -> OPEN_WAIT -> CLOSING_CENTER -> POS_2 -> READY
+```
+
+`open_wait_ms` se carga desde NVS a la copia RAM de `CDoorConfig`. Al entrar en `OPEN_WAIT`, la FSM toma una copia del valor RAM y usa un `CTimer` creado en `motorized_door.ino`. No se agregó ningún `delay()` para el ciclo.
+
+`stop` cancela el movimiento y el ciclo, deja el equipo en `STOPPED` y no inicia un retorno oculto. La recuperación explícita es mover a POS_2 con `go` o reiniciar en modo normal.
+
+En `st_mode=100` no se ejecuta el centrado automático y se rechazan `fwd`/`rew`; siguen disponibles los comandos de diagnóstico.
+
+### Estado DANGER
+
+El pulsador se evalúa exclusivamente en el estado funcional de reposo:
+
+```text
+DEV_READY
+puerta centrada en POS_2
+motor detenido
+LED azul respirando
+```
+
+Transición:
+
+```text
+DEV_READY + pulsación válida
+  -> DEV_DANGER
+  -> rojo intermitente durante danger_time_ms
+  -> DEV_READY
+```
+
+Durante apertura, espera abierta, cierre, centrado o `STOPPED`, el pulsador no genera ninguna transición. `CButton` aplica el antirebote con su propio `CTimer`; el objeto `DangerButton` y el `dangerTimer` del estado se crean en `motorized_door.ino`.
+
+El GPIO14 deja de ser consumido directamente por `CDoorMotion`: ya no cancela movimientos ni fuerza una alarma global. La decisión funcional pertenece únicamente a la FSM superior.
 
 ---
 
@@ -202,7 +259,7 @@ El nombre histórico de algunas constantes todavía contiene `PD_POSITION`, pero
 
 ## FSM LED
 
-Comportamiento actual:
+Comportamiento de `v5.2a`:
 
 ```text
 LED_STRIP_OFF
@@ -211,18 +268,23 @@ LED_STRIP_OFF
 LED_STRIP_IDLE
   Azul con respiración.
 
-LED_STRIP_MOVING_FWD
-  Verde desplazándose en el sentido visual forward.
+LED_STRIP_MOVING_FWD / LED_STRIP_MOVING_RWD
+  Verde desplazándose durante apertura, centrado y movimientos directos.
 
-LED_STRIP_MOVING_RWD
-  Verde desplazándose en el sentido visual rewind.
+LED_STRIP_OPEN_WAIT
+  Verde fijo durante open_wait_ms.
+
+LED_STRIP_CLOSING_FWD / LED_STRIP_CLOSING_RWD
+  Rojo desplazándose durante el retorno a POS_2.
 
 LED_STRIP_ARRIVED
-  Transición suave de llegada antes de volver a IDLE.
+  Conserva brevemente el último cuadro antes de volver a IDLE.
 
 LED_STRIP_ALARM
-  Rojo ante FC_L activo.
+  Rojo intermitente durante DEV_DANGER.
 ```
+
+La FSM superior decide cuándo corresponde apertura, espera o cierre. `DoorMotion` y `DoorMotor` no conocen colores ni estados de producto.
 
 Relación actual entre salida de motor y animación:
 
@@ -274,7 +336,7 @@ La única entrada reemplazada es la posición angular.
 
 ---
 
-## Defaults compilados de `v5.1e`
+## Defaults compilados de `v5.2b`
 
 Los siguientes valores quedan definidos en `door_config.h`:
 
@@ -311,6 +373,11 @@ Los siguientes valores quedan definidos en `door_config.h`:
 #define DOOR_LED_BREATH_MS_DEFAULT              25UL
 #define DOOR_LED_BLINK_MS_DEFAULT               180UL
 
+#define DOOR_OPEN_WAIT_MS_DEFAULT               2000UL
+#define DOOR_OPEN_WAIT_MS_MAX                   60000UL
+#define DOOR_DANGER_TIME_MS_DEFAULT             3000UL
+#define DOOR_DANGER_TIME_MS_MAX                 60000UL
+
 #define DOOR_LOG_LEVEL_DEFAULT                  DOOR_LOG_LEVEL_MSG
 ```
 
@@ -320,8 +387,11 @@ Consecuencia:
 
 ```text
 La configuración NVS existente se conserva.
-Un equipo con NVS vacío toma los nuevos defaults.
-factory-reset carga y guarda los nuevos defaults.
+Las claves nuevas usan sus defaults si todavía no existen:
+  openwait=2000 ms
+  dangertime=3000 ms
+Al configurar open_wait_ms o danger_time_ms se actualizan RAM y NVS.
+factory-reset carga y guarda todos los defaults.
 ```
 
 ---
@@ -335,7 +405,18 @@ factory-reset carga y guarda los nuevos defaults.
 {"info":"all-params"}
 ```
 
-### Movimiento real
+### Ciclo automático de demo
+
+```json
+{"cmd":"fwd"}
+{"cmd":"rew"}
+{"open_wait_ms":2000}
+{"danger_time_ms":3000}
+```
+
+`open_wait_ms` y `danger_time_ms` aceptan de 0 a 60000 ms y persisten en NVS.
+
+### Movimiento real de diagnóstico
 
 ```json
 {"cmd":"go","pos":1}
@@ -425,7 +506,7 @@ factory-reset carga y guarda los nuevos defaults.
 {"st_mode":100}
 ```
 
-`st_mode` está persistido, pero todavía no gobierna una función activa de la máquina superior.
+`st_mode=0` habilita el centrado automático y los ciclos de demo. `st_mode=100` inicia detenido, evita movimientos automáticos al boot y mantiene disponibles `go`, `stop` y `led-sim`. Cambiar `st_mode` en runtime afecta los próximos comandos; el centrado de arranque se evalúa al reiniciar.
 
 ### Restaurar defaults
 
@@ -433,7 +514,7 @@ factory-reset carga y guarda los nuevos defaults.
 {"cmd":"factory-reset"}
 ```
 
-En `v5.1e`, `factory-reset` recupera directamente el set validado del motor nuevo y la FSM LED.
+En `v5.2b`, `factory-reset` recupera el set validado, `open_wait_ms=2000`, `danger_time_ms=3000` y `st_mode=0`. No inicia un movimiento inmediatamente; el centrado normal se evalúa en el próximo reinicio.
 
 ---
 
@@ -541,14 +622,15 @@ Si el conjunto mecánico vuelve a fallar, el próximo paso no será insistir con
 
 ## Próximos pasos
 
-Orden acordado:
+Orden acordado después de validar `v5.2b-danger-button-fsm` en hardware:
 
 ```text
-1. Agregar en firmware el estado de bloqueo activado por switch.
-2. Representar el bloqueo mediante el modo LED rojo correspondiente.
-3. Validar la máquina superior del dispositivo sin alterar DoorMotion.
-4. Retomar y completar beam_app con Codex.
-5. Integrar el caso de estudio al informe final del proyecto.
+1. Validar DANGER únicamente en DEV_READY/POS_2.
+2. Cerrar y etiquetar la FSM automática de demo con el evento de pulsador.
+3. Mantener como evolución futura el tratamiento del evento en otros estados.
+4. Migrar posteriormente a ESP-IDF/RTOS con productor de entrada y cola de eventos.
+5. Mantener HOLDING y buzzer fuera hasta contar con hardware justificable.
+6. Retomar beam_app sin mezclar sus cambios con el firmware.
 ```
 
 El informe final presentará el prototipo como un proceso real de I+D, conectando electrónica, firmware, control automático, mecánica, instrumentación, programación, análisis de datos y gestión de riesgo técnico.

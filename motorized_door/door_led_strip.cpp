@@ -118,7 +118,10 @@ void CLedStrip::set_state(LedStripState newState)
     return;
   }
 
-  if ((currentState == LED_STRIP_MOVING_FWD || currentState == LED_STRIP_MOVING_RWD) &&
+  if ((currentState == LED_STRIP_MOVING_FWD ||
+       currentState == LED_STRIP_MOVING_RWD ||
+       currentState == LED_STRIP_CLOSING_FWD ||
+       currentState == LED_STRIP_CLOSING_RWD) &&
       newState == LED_STRIP_IDLE) {
     newState = LED_STRIP_ARRIVED;
   }
@@ -144,6 +147,15 @@ const char* CLedStrip::state_name() const
 
     case LED_STRIP_MOVING_RWD:
       return "MOVING_RWD";
+
+    case LED_STRIP_OPEN_WAIT:
+      return "OPEN_WAIT";
+
+    case LED_STRIP_CLOSING_FWD:
+      return "CLOSING_FWD";
+
+    case LED_STRIP_CLOSING_RWD:
+      return "CLOSING_RWD";
 
     case LED_STRIP_ARRIVED:
       return "ARRIVED";
@@ -196,6 +208,29 @@ void CLedStrip::update()
       if (forceRender || animationTimer.expired_ms(stepPeriodMs)) {
         animationTimer.start();
         render_moving(false);
+        forceRender = false;
+      }
+      break;
+
+    case LED_STRIP_OPEN_WAIT:
+      if (forceRender) {
+        render_open_wait();
+        forceRender = false;
+      }
+      break;
+
+    case LED_STRIP_CLOSING_FWD:
+      if (forceRender || animationTimer.expired_ms(stepPeriodMs)) {
+        animationTimer.start();
+        render_closing(true);
+        forceRender = false;
+      }
+      break;
+
+    case LED_STRIP_CLOSING_RWD:
+      if (forceRender || animationTimer.expired_ms(stepPeriodMs)) {
+        animationTimer.start();
+        render_closing(false);
         forceRender = false;
       }
       break;
@@ -280,7 +315,12 @@ void CLedStrip::reset_animation_for_state(LedStripState newState)
 
     case LED_STRIP_MOVING_FWD:
     case LED_STRIP_MOVING_RWD:
+    case LED_STRIP_CLOSING_FWD:
+    case LED_STRIP_CLOSING_RWD:
       movingIndex = 0;
+      break;
+
+    case LED_STRIP_OPEN_WAIT:
       break;
 
     case LED_STRIP_ARRIVED:
@@ -347,6 +387,56 @@ void CLedStrip::render_moving(bool forward)
     }
 
     pixels.setPixelColor(pos, make_color(0, green, 0));
+  }
+
+  pixels.show();
+
+  if (forward) {
+    movingIndex = (movingIndex + 1) % count;
+  } else {
+    if (movingIndex == 0) {
+      movingIndex = count - 1;
+    } else {
+      movingIndex--;
+    }
+  }
+}
+
+void CLedStrip::render_open_wait()
+{
+  uint32_t green = make_color(0, 255, 0);
+
+  for (uint16_t i = 0; i < count; i++) {
+    pixels.setPixelColor(i, green);
+  }
+
+  pixels.show();
+}
+
+void CLedStrip::render_closing(bool forward)
+{
+  clear_pixels();
+
+  for (uint8_t tail = 0; tail < 3 && tail < count; tail++) {
+    uint16_t pos;
+
+    if (forward) {
+      pos = (movingIndex + count - tail) % count;
+    } else {
+      pos = (movingIndex + tail) % count;
+    }
+
+    uint8_t red = 0;
+
+    if (tail == 0) {
+      red = 255;
+    } else if (tail == 1) {
+      red = 80;
+    } else {
+      red = 20;
+    }
+
+    pixels.setPixelColor(pos, make_color(red, 0, 0));
   }
 
   pixels.show();

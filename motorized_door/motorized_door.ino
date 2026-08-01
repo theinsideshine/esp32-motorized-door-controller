@@ -14,12 +14,13 @@
 #include "door_angle_sensor.h"
 #include "door_led_strip.h"
 #include "timer.h"
+#include "button.h"
 #include "log.h"
 
 /*
   ============================================================
   PROYECTO: ESP32 MOTORIZED DOOR CONTROLLER
-  VERSION: v5.1e-validated-defaults
+  VERSION: v5.2b-danger-button-fsm
   ============================================================
 
   ALCANCE ACTUAL
@@ -30,11 +31,16 @@
   - Control configurable por motion_mode.
   - Default validado para el motor nuevo: motion_mode=2,
     Kp=0.7, Ki=0, Kd=0, PWM maximo 80 y minimo efectivo 70.
+  - FSM superior de demo:
+      centra automaticamente en POS_2 al arrancar en st_mode=0;
+      fwd abre a POS_1, espera y vuelve a POS_2;
+      rew abre a POS_3, espera y vuelve a POS_2.
   - FSM LED WS2812B:
-      IDLE azul
-      MOVING verde segun el sentido del motor
-      ARRIVED con transicion suave
-      ALARM rojo por FC_L
+      IDLE azul; apertura verde; espera verde fija;
+      cierre rojo desplazandose; ARRIVED suave.
+  - Pulsador DANGER en GPIO14:
+      se atiende solamente en DEV_READY, con puerta centrada en POS_2;
+      activa rojo intermitente durante danger_time_ms y vuelve a READY.
   - led-sim runtime para diagnostico:
       usa el mismo camino DoorMotion/DoorMotor/FSM LED;
       reemplaza solamente la lectura angular por una posicion virtual.
@@ -63,6 +69,8 @@
   NOTAS
   ------------------------------------------------------------
   - HOLDING activo permanece reservado para hardware real de bloqueo.
+  - st_mode=100 evita el centrado automatico y reserva el equipo para pruebas.
+  - open_wait_ms y danger_time_ms se cargan desde NVS a la copia RAM de CDoorConfig.
   - El problema de tironeo observado tras cambiar el motor fue aislado
     al termino D de la implementacion actual. Con Kd=0 el movimiento y
     la animacion LED quedaron validados.
@@ -73,7 +81,7 @@
 // VERSION
 // ============================================================
 
-#define APP_VERSION "v5.1e-validated-defaults"
+#define APP_VERSION "v5.2b-danger-button-fsm"
 
 // ============================================================
 // PINES
@@ -84,8 +92,9 @@
 #define AIN2_PIN 16
 #define AIN1_PIN 17
 
-// Final de carrera izquierdo
-#define FC_L_PIN 14
+// Pulsador DANGER (hardware existente en GPIO14)
+#define DANGER_BUTTON_PIN 14
+#define DANGER_BUTTON_ACTIVE_LEVEL HIGH
 
 // AS5048A SPI
 #define AS5048_CS   10
@@ -141,6 +150,7 @@ CDoorMotion DoorMotion;
 CDoorMotor DoorMotor;
 CDoorAngleSensor DoorSensor(sensor);
 CLedStrip LedStrip;
+CButton DangerButton;
 Clog Log;
 
 // ============================================================
@@ -155,17 +165,45 @@ Clog Log;
 */
 
 enum DeviceState {
-  DEV_IDLE,
+  DEV_BOOT,
+  DEV_CENTERING,
+  DEV_READY,
+  DEV_OPENING_FWD,
+  DEV_OPENING_REW,
+  DEV_OPEN_WAIT,
+  DEV_CLOSING_CENTER,
+  DEV_DIAGNOSTIC_POSITIONING,
   DEV_MANUAL_MOVING,
-  DEV_POSITIONING
+  DEV_DANGER,
+  DEV_STOPPED
 };
 
-DeviceState deviceState = DEV_IDLE;
+enum DemoCycleKind : uint8_t {
+  DEMO_CYCLE_NONE = 0,
+  DEMO_CYCLE_FWD,
+  DEMO_CYCLE_REW
+};
+
+DeviceState deviceState = DEV_BOOT;
+DemoCycleKind activeDemoCycle = DEMO_CYCLE_NONE;
 
 bool streamEnabled = false;
 
 // Manual
 CTimer manualMoveTimer;
+
+// Espera no bloqueante con puerta abierta.
+// El objeto vive en el .ino; el tiempo viene de la RAM de CDoorConfig.
+CTimer openWaitTimer;
+uint32_t activeOpenWaitMs = 0;
+
+// Estado DANGER no bloqueante.
+// El objeto vive en el .ino; el tiempo viene de la RAM de CDoorConfig.
+CTimer dangerTimer;
+uint32_t activeDangerTimeMs = 0;
+
+// Movimiento directo de diagnostico.
+uint8_t diagnosticTargetPos = 0;
 
 // Stream
 CTimer streamTimer;
@@ -190,6 +228,7 @@ uint8_t ledSimFromPos = 0;
 uint8_t ledSimToPos = 0;
 uint32_t ledSimDurationMs = 0;
 uint32_t ledSimStartMs = 0;
+DeviceState ledSimReturnState = DEV_STOPPED;
 
 bool isPositionActive() {
   return DoorMotion.is_active();
@@ -213,15 +252,51 @@ float angleDistanceDeg(float aDeg, float bDeg) {
 
 const char* deviceStateName() {
   switch (deviceState) {
+    case DEV_BOOT:
+      return "BOOT";
+
+    case DEV_CENTERING:
+      return "CENTERING";
+
+    case DEV_READY:
+      return "READY";
+
+    case DEV_OPENING_FWD:
+      return "OPENING_FWD";
+
+    case DEV_OPENING_REW:
+      return "OPENING_REW";
+
+    case DEV_OPEN_WAIT:
+      return "OPEN_WAIT";
+
+    case DEV_CLOSING_CENTER:
+      return "CLOSING_CENTER";
+
+    case DEV_DIAGNOSTIC_POSITIONING:
+      return "DIAGNOSTIC_POSITIONING";
+
     case DEV_MANUAL_MOVING:
       return "MANUAL_MOVING";
 
-    case DEV_POSITIONING:
-      return "POSITIONING";
+    case DEV_DANGER:
+      return "DANGER";
 
+    case DEV_STOPPED:
     default:
-      return "IDLE";
+      return "STOPPED";
   }
+}
+
+bool isNormalExecutionMode() {
+  return Config.get_st_mode() == DOOR_ST_MODE_NORMAL;
+}
+
+bool isDemoCycleActive() {
+  return deviceState == DEV_OPENING_FWD ||
+         deviceState == DEV_OPENING_REW ||
+         deviceState == DEV_OPEN_WAIT ||
+         deviceState == DEV_CLOSING_CENTER;
 }
 
 // ============================================================
@@ -256,8 +331,8 @@ uint32_t getLastSensorReadUs() {
   return ledSimActive ? 0 : DoorSensor.last_read_us();
 }
 
-bool isFcLActive() {
-  return digitalRead(FC_L_PIN) == HIGH;
+bool isDangerSwitchActive() {
+  return DangerButton.is_active();
 }
 
 void syncLogLevel() {
@@ -266,7 +341,7 @@ void syncLogLevel() {
 
 void printSensor() {
   Log.msg(
-    F("raw=%u deg=%.2f mid=%.2f delta_mid=%.2f rad=%.5f vel_rad_s=%.5f motor=%s pwm=%lu auto=%s device=%s position=%s FC_L=%s"),
+    F("raw=%u deg=%.2f mid=%.2f delta_mid=%.2f rad=%.5f vel_rad_s=%.5f motor=%s pwm=%lu auto=%s device=%s position=%s DANGER_SW=%s"),
     DoorSensor.raw(),
     DoorSensor.deg(),
     POS_MEDIO_APROX_DEG,
@@ -278,7 +353,7 @@ void printSensor() {
     isPositionActive() ? "ON" : "OFF",
     deviceStateName(),
     DoorMotion.state_name(),
-    isFcLActive() ? "ACTIVO" : "NORMAL"
+    isDangerSwitchActive() ? "ACTIVO" : "NORMAL"
   );
 }
 
@@ -316,7 +391,6 @@ void plantPlotIfNeeded() {
 
 void stopMotorOnly() {
   DoorMotor.stop_only();
-  deviceState = DEV_IDLE;
 }
 
 void stopMotorOutputOnly() {
@@ -357,6 +431,7 @@ void checkMotorTimeout() {
   if (manualMoveTimer.expired_ms(TIMEOUT_MANUAL_MS)) {
     Log.msg(F("AUTO STOP por timeout manual"));
     stopMotorOnly();
+    deviceState = DEV_STOPPED;
 
     readSensorDegMeasured(false);
     printSensor();
@@ -364,30 +439,234 @@ void checkMotorTimeout() {
 }
 
 // ============================================================
-// HOST REQUESTS: main coordina, DoorMotion mueve
+// FSM SUPERIOR / HOST REQUESTS
 // ============================================================
 
-void startDoorMotionTo(uint8_t pos, const char* targetName) {
+bool startDoorMotionTo(uint8_t pos, const char* targetName) {
   float targetDeg = Config.get_pos_deg(pos);
 
-  if (DoorMotion.start(targetDeg, targetName)) {
-    plantPlotTargetDeg = targetDeg;
+  if (!DoorMotion.start(targetDeg, targetName)) {
+    return false;
+  }
 
-    // DoorMotion.start() ya leyo el sensor mediante callback.
-    // Usamos el valor actual del wrapper para fijar el error inicial
-    // de la grafica relativa.
-    plantPlotStartAbsErrorDeg = fabs(angleErrorDeg(
-      ledSimActive ? readLedSimDeg() : DoorSensor.deg(),
-      plantPlotTargetDeg
-    ));
+  plantPlotTargetDeg = targetDeg;
 
-    // Para identificacion de planta usar motion_mode=0.
-    // En ese modo pwm_cmd coincide con la entrada fija aplicada.
-    plantPlotPwmCmd = (uint16_t)Config.get_pwm_move();
+  // DoorMotion.start() todavia no ejecuta START, por lo que usamos
+  // la ultima lectura disponible del wrapper o la posicion virtual.
+  plantPlotStartAbsErrorDeg = fabs(angleErrorDeg(
+    ledSimActive ? readLedSimDeg() : DoorSensor.deg(),
+    plantPlotTargetDeg
+  ));
 
-    plantPlotTimer.start_ms_ago(PLANT_PLOT_PERIOD_MS);
+  // Para identificacion de planta usar motion_mode=0.
+  plantPlotPwmCmd = (uint16_t)Config.get_pwm_move();
+  plantPlotTimer.start_ms_ago(PLANT_PLOT_PERIOD_MS);
 
-    deviceState = DEV_POSITIONING;
+  return true;
+}
+
+void setDeviceReady(const char* reason) {
+  activeDemoCycle = DEMO_CYCLE_NONE;
+  diagnosticTargetPos = 0;
+  deviceState = DEV_READY;
+
+  Log.msg(F("DEVICE READY: %s"), reason == nullptr ? "sin_reason" : reason);
+}
+
+void setDeviceStopped(const char* reason) {
+  activeDemoCycle = DEMO_CYCLE_NONE;
+  diagnosticTargetPos = 0;
+  deviceState = DEV_STOPPED;
+
+  Log.msg(F("DEVICE STOPPED: %s"), reason == nullptr ? "sin_reason" : reason);
+}
+
+void enterDanger() {
+  activeDangerTimeMs = Config.get_danger_time_ms();
+  dangerTimer.start();
+  deviceState = DEV_DANGER;
+
+  Log.msg(F("DEVICE DANGER: %lu ms"), (unsigned long)activeDangerTimeMs);
+}
+
+void beginOpenWait() {
+  // Se toma una copia RAM al entrar al estado. Cambiar open_wait_ms
+  // durante la espera afecta al ciclo siguiente, no al actual.
+  activeOpenWaitMs = Config.get_open_wait_ms();
+  openWaitTimer.start();
+  deviceState = DEV_OPEN_WAIT;
+
+  Log.msg(F("DEMO OPEN WAIT: %lu ms"), (unsigned long)activeOpenWaitMs);
+}
+
+bool startDemoOpening(DemoCycleKind cycle) {
+  uint8_t targetPos = cycle == DEMO_CYCLE_FWD ? 1 : 3;
+  const char* targetName = cycle == DEMO_CYCLE_FWD ? "DEMO_FWD_POS_1" : "DEMO_REW_POS_3";
+
+  activeDemoCycle = cycle;
+  deviceState = cycle == DEMO_CYCLE_FWD ? DEV_OPENING_FWD : DEV_OPENING_REW;
+
+  if (!startDoorMotionTo(targetPos, targetName)) {
+    setDeviceStopped("motion_start_failed");
+    return false;
+  }
+
+  return true;
+}
+
+void startDemoClosingCenter() {
+  deviceState = DEV_CLOSING_CENTER;
+
+  if (!startDoorMotionTo(2, "DEMO_CLOSE_POS_2")) {
+    setDeviceStopped("close_start_failed");
+  }
+}
+
+void handleDoorMotionCompletion() {
+  if (!DoorMotion.has_completion_event()) {
+    return;
+  }
+
+  bool success = DoorMotion.completion_succeeded();
+  const char* reason = DoorMotion.completion_reason();
+  DeviceState completedState = deviceState;
+  bool completedLedSim = ledSimActive;
+
+  DoorMotion.clear_completion_event();
+
+  if (completedLedSim) {
+    ledSimActive = false;
+
+    // Un stop durante led-sim deja el equipo detenido, igual que cualquier
+    // otra cancelacion explicita del host.
+    if (completedState == DEV_STOPPED) {
+      return;
+    }
+
+    if (success) {
+      deviceState = ledSimReturnState;
+      Log.msg(F("LED SIM finalizado: reason=%s return=%s"), reason, deviceStateName());
+    } else {
+      setDeviceStopped(reason);
+    }
+
+    return;
+  }
+
+  switch (completedState) {
+    case DEV_CENTERING:
+      if (success) {
+        setDeviceReady(reason);
+      } else {
+        setDeviceStopped(reason);
+      }
+      break;
+
+    case DEV_OPENING_FWD:
+    case DEV_OPENING_REW:
+      if (success) {
+        beginOpenWait();
+      } else {
+        setDeviceStopped(reason);
+      }
+      break;
+
+    case DEV_CLOSING_CENTER:
+      if (success) {
+        setDeviceReady(reason);
+      } else {
+        setDeviceStopped(reason);
+      }
+      break;
+
+    case DEV_DIAGNOSTIC_POSITIONING:
+      if (success && diagnosticTargetPos == 2 && isNormalExecutionMode()) {
+        setDeviceReady(reason);
+      } else {
+        setDeviceStopped(reason);
+      }
+      break;
+
+    case DEV_STOPPED:
+      // El host cancelo el ciclo mientras DoorMotion terminaba SETTLING.
+      // Se consume el evento sin iniciar ninguna accion automatica.
+      break;
+
+    default:
+      if (!success) {
+        setDeviceStopped(reason);
+      }
+      break;
+  }
+}
+
+void updateDeviceFsm() {
+  handleDoorMotionCompletion();
+
+  if (deviceState == DEV_READY) {
+    DangerButton.debounce();
+
+    if (DangerButton.is_pressed()) {
+      enterDanger();
+      return;
+    }
+  }
+
+  if (deviceState == DEV_DANGER) {
+    if (dangerTimer.expired_ms(activeDangerTimeMs)) {
+      setDeviceReady("danger_timeout");
+    }
+
+    return;
+  }
+
+  if (deviceState == DEV_OPEN_WAIT && openWaitTimer.expired_ms(activeOpenWaitMs)) {
+    startDemoClosingCenter();
+  }
+}
+
+void initializeDeviceFsm() {
+  deviceState = DEV_BOOT;
+  activeDemoCycle = DEMO_CYCLE_NONE;
+
+  if (!isNormalExecutionMode()) {
+    setDeviceStopped("st_mode_test_no_auto_center");
+    return;
+  }
+
+  float currentDeg = DoorSensor.deg();
+  float centerErrorDeg = angleDistanceDeg(currentDeg, Config.get_pos2_deg());
+
+  if (centerErrorDeg <= Config.get_auto_tolerance_deg()) {
+    setDeviceReady("boot_already_centered");
+    return;
+  }
+
+  deviceState = DEV_CENTERING;
+
+  if (!startDoorMotionTo(2, "BOOT_CENTER_POS_2")) {
+    setDeviceStopped("boot_center_start_failed");
+  }
+}
+
+void stopAutomaticActivity() {
+  activeDemoCycle = DEMO_CYCLE_NONE;
+  deviceState = DEV_STOPPED;
+
+  if (DoorMotion.is_moving_or_starting()) {
+    DoorMotion.cancel("cancelado_por_host");
+    return;
+  }
+
+  if (DoorMotion.is_holding()) {
+    DoorMotion.cancel("hold_liberado_por_host");
+    return;
+  }
+
+  // En SETTLING o OPEN_WAIT el motor ya esta cortado. No se reemplaza
+  // el reason original y no se agrega ninguna espera bloqueante.
+  if (!DoorMotor.is_stopped()) {
+    stopMotorOnly();
   }
 }
 
@@ -402,51 +681,76 @@ void processHostRequest() {
   uint32_t requestedDurationMs = Config.get_requested_duration_ms();
   Config.clear_request();
 
-  if (DoorMotion.is_busy() && req != DOOR_REQ_STOP) {
-    Log.msg(F("AUTO ocupado: solo se acepta stop para cancelar."));
+  if (req == DOOR_REQ_STOP) {
+    stopAutomaticActivity();
+    return;
+  }
+
+  if (req == DOOR_REQ_FWD || req == DOOR_REQ_REW) {
+    const char* command = req == DOOR_REQ_FWD ? "fwd" : "rew";
+
+    if (!isNormalExecutionMode()) {
+      Config.send_runtime_command_result(command, false, "st_mode_test", deviceStateName());
+      return;
+    }
+
+    if (deviceState != DEV_READY || DoorMotion.is_active() || ledSimActive) {
+      Config.send_runtime_command_result(command, false, "device_not_ready", deviceStateName());
+      return;
+    }
+
+    DemoCycleKind cycle = req == DOOR_REQ_FWD ? DEMO_CYCLE_FWD : DEMO_CYCLE_REW;
+
+    if (!startDemoOpening(cycle)) {
+      Config.send_runtime_command_result(command, false, "motion_start_failed", deviceStateName());
+      return;
+    }
+
+    Config.send_runtime_command_result(command, true, nullptr, deviceStateName());
+    return;
+  }
+
+  if (DoorMotion.is_active() || isDemoCycleActive() || deviceState == DEV_CENTERING || deviceState == DEV_DANGER) {
+    Log.msg(F("DEVICE ocupado: solo se acepta stop para cancelar."));
     return;
   }
 
   switch (req) {
-    case DOOR_REQ_STOP:
-      if (DoorMotion.is_moving_or_starting()) {
-        DoorMotion.cancel("cancelado_por_host");
-      } else if (DoorMotion.is_settling()) {
-        // Ya se corto el motor y se esta esperando la lectura final estable.
-        // No se cambia el reason original.
-      } else if (DoorMotion.is_holding()) {
-        // Reservado para futuro motion_mode=2: stop libera el mantenimiento.
-        DoorMotion.cancel("hold_liberado_por_host");
-        stopMotorOnly();
+    case DOOR_REQ_GO_POS_1:
+    case DOOR_REQ_GO_POS_2:
+    case DOOR_REQ_GO_POS_3: {
+      uint8_t pos = req == DOOR_REQ_GO_POS_1 ? 1 : (req == DOOR_REQ_GO_POS_2 ? 2 : 3);
+      const char* name = pos == 1 ? "POS_1" : (pos == 2 ? "POS_2" : "POS_3");
+
+      diagnosticTargetPos = pos;
+
+      if (startDoorMotionTo(pos, name)) {
+        deviceState = DEV_DIAGNOSTIC_POSITIONING;
       } else {
-        stopMotorOnly();
+        setDeviceStopped("diagnostic_start_failed");
       }
       break;
-
-    case DOOR_REQ_GO_POS_1:
-      startDoorMotionTo(1, "POS_1");
-      break;
-
-    case DOOR_REQ_GO_POS_2:
-      startDoorMotionTo(2, "POS_2");
-      break;
-
-    case DOOR_REQ_GO_POS_3:
-      startDoorMotionTo(3, "POS_3");
-      break;
+    }
 
     case DOOR_REQ_LED_SIM:
+      if (deviceState != DEV_READY && deviceState != DEV_STOPPED) {
+        Log.msg(F("LED SIM rechazado: device=%s"), deviceStateName());
+        break;
+      }
+
+      ledSimReturnState = deviceState;
       ledSimFromPos = requestedFromPos;
       ledSimToPos = requestedToPos;
       ledSimDurationMs = requestedDurationMs;
       ledSimStartMs = millis();
       ledSimActive = true;
+      diagnosticTargetPos = ledSimToPos;
 
-      // Desde aca corre exactamente el camino normal de movimiento y LED.
-      startDoorMotionTo(ledSimToPos, "LED_SIM");
-
-      if (!DoorMotion.is_active()) {
+      if (startDoorMotionTo(ledSimToPos, "LED_SIM")) {
+        deviceState = DEV_DIAGNOSTIC_POSITIONING;
+      } else {
         ledSimActive = false;
+        deviceState = ledSimReturnState;
       }
       break;
 
@@ -498,14 +802,39 @@ void updateLedStripStateFromRuntime() {
     return;
   }
 
-  if (isFcLActive()) {
+  if (deviceState == DEV_DANGER) {
     LedStrip.set_state(LED_STRIP_ALARM);
     return;
   }
 
   DoorMotorState motorState = DoorMotor.state();
 
-  if (DoorMotion.is_moving_or_starting() || motorState == DOOR_MOTOR_LEFT || motorState == DOOR_MOTOR_RIGHT) {
+  if (deviceState == DEV_OPEN_WAIT) {
+    LedStrip.set_state(LED_STRIP_OPEN_WAIT);
+    return;
+  }
+
+  if (deviceState == DEV_CLOSING_CENTER) {
+    if (motorState == DOOR_MOTOR_RIGHT) {
+      LedStrip.set_state(LED_STRIP_CLOSING_RWD);
+      return;
+    }
+
+    if (motorState == DOOR_MOTOR_LEFT) {
+      LedStrip.set_state(LED_STRIP_CLOSING_FWD);
+      return;
+    }
+
+    // START antes de aplicar salida: el ciclo indica el sentido esperado.
+    LedStrip.set_state(activeDemoCycle == DEMO_CYCLE_FWD
+                         ? LED_STRIP_CLOSING_RWD
+                         : LED_STRIP_CLOSING_FWD);
+    return;
+  }
+
+  if (DoorMotion.is_moving_or_starting() ||
+      motorState == DOOR_MOTOR_LEFT ||
+      motorState == DOOR_MOTOR_RIGHT) {
     if (motorState == DOOR_MOTOR_RIGHT) {
       LedStrip.set_state(LED_STRIP_MOVING_RWD);
       return;
@@ -516,7 +845,7 @@ void updateLedStripStateFromRuntime() {
       return;
     }
 
-    // Estado START antes de aplicar salida de motor: verde generico.
+    // START antes de aplicar salida de motor: verde generico.
     LedStrip.set_state(LED_STRIP_MOVING_FWD);
     return;
   }
@@ -547,7 +876,7 @@ void setup() {
 
   syncLogLevel();
 
-  pinMode(FC_L_PIN, INPUT_PULLUP);
+  DangerButton.init(DANGER_BUTTON_PIN, DANGER_BUTTON_ACTIVE_LEVEL, INPUT_PULLUP);
 
   LedStrip.begin(RGB_LED_DATA,
                  (uint16_t)Config.get_led_count(),
@@ -557,7 +886,7 @@ void setup() {
   LedStrip.update();
 
   DoorMotor.begin(STBY_PIN, AIN1_PIN, AIN2_PIN, PWM_FREQ, PWM_RES);
-  deviceState = DEV_IDLE;
+  deviceState = DEV_BOOT;
 
   // Mantener la secuencia de inicializacion AS5048A ya validada.
   SPI.begin(AS5048_SCK, AS5048_MISO, AS5048_MOSI, AS5048_CS);
@@ -566,7 +895,6 @@ void setup() {
   DoorMotionCallbacks motionCallbacks;
   motionCallbacks.read_sensor_deg = readSensorDegMeasured;
   motionCallbacks.get_last_sensor_read_us = getLastSensorReadUs;
-  motionCallbacks.is_fc_l_active = isFcLActive;
   motionCallbacks.motor_right_continuous = motorRightContinuous;
   motionCallbacks.motor_left_continuous = motorLeftContinuous;
   motionCallbacks.stop_motor_output_only = stopMotorOutputOnly;
@@ -585,8 +913,10 @@ void setup() {
 
   if (Config.get_log_level() != LOG_CTRL_ARDUINO_PLOTTER) {
     printSensor();
-    Log.msg(F("Sistema listo. Stream apagado por defecto."));
+    Log.msg(F("Inicializacion completa. Stream apagado por defecto."));
   }
+
+  initializeDeviceFsm();
 }
 
 void loop() {
@@ -597,23 +927,10 @@ void loop() {
   if (DoorMotion.is_active()) {
     DoorMotion.update();
     plantPlotIfNeeded();
-
-    if (!DoorMotion.is_active() && deviceState == DEV_POSITIONING) {
-      deviceState = DEV_IDLE;
-      ledSimActive = false;
-    }
-
-    updateLedStrip();
-    return;
   }
 
-  if (deviceState == DEV_POSITIONING) {
-    deviceState = DEV_IDLE;
-    ledSimActive = false;
-  }
-
+  updateDeviceFsm();
   checkMotorTimeout();
-
   updateLedStrip();
 
   if (streamEnabled && streamTimer.expired_ms(STREAM_PERIOD_MS)) {

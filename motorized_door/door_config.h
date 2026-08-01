@@ -35,7 +35,7 @@
 #define DOOR_CFG_SCHEMA_VERSION   1UL
 
 // ============================================================
-// DEFAULTS VALIDADOS - v5.1e / MOTOR N20 NUEVO + LED FSM
+// DEFAULTS VALIDADOS - v5.2b / MOTOR N20 NUEVO + DANGER BUTTON FSM
 // ============================================================
 
 #define DOOR_POS_1_DEFAULT_DEG    2.29f
@@ -68,6 +68,14 @@
 #define DOOR_LED_STEP_MS_DEFAULT            60UL
 #define DOOR_LED_BREATH_MS_DEFAULT          25UL
 #define DOOR_LED_BLINK_MS_DEFAULT           180UL
+
+// Ciclo automatico de demo
+#define DOOR_OPEN_WAIT_MS_DEFAULT           2000UL
+#define DOOR_OPEN_WAIT_MS_MAX               60000UL
+
+// Estado DANGER por pulsador, valido solamente en DEV_READY/POS_2.
+#define DOOR_DANGER_TIME_MS_DEFAULT         3000UL
+#define DOOR_DANGER_TIME_MS_MAX             60000UL
 
 // Movimiento:
 //   0 = baseline fixed PWM.
@@ -107,7 +115,9 @@ enum DoorHostRequest : uint8_t {
   DOOR_REQ_GO_POS_2,
   DOOR_REQ_GO_POS_3,
   DOOR_REQ_STOP,
-  DOOR_REQ_LED_SIM
+  DOOR_REQ_LED_SIM,
+  DOOR_REQ_FWD,
+  DOOR_REQ_REW
 };
 
 class CDoorConfig {
@@ -127,6 +137,8 @@ public:
       {"info":"all-params"}
       {"cmd":"go","pos":2}
       {"cmd":"stop"}
+      {"cmd":"fwd"}
+      {"cmd":"rew"}
       {"cmd":"led-sim","from":1,"to":2,"ms":700}
       {"cmd":"led-sim-stop"}
       {"cmd":"factory-reset"}
@@ -154,6 +166,8 @@ public:
       {"led_step_ms":60}
       {"led_breath_ms":25}
       {"led_blink_ms":180}
+      {"open_wait_ms":2000}
+      {"danger_time_ms":3000}
   */
   void host_cmd();
 
@@ -195,6 +209,8 @@ public:
 
   uint32_t get_log_level() const;
   uint32_t get_st_mode() const;
+  uint32_t get_open_wait_ms() const;
+  uint32_t get_danger_time_ms() const;
 
   uint32_t get_led_enabled() const;
   uint32_t get_led_count() const;
@@ -240,6 +256,8 @@ public:
 
   void set_log_level(uint32_t value);
   void set_st_mode(uint32_t value);
+  void set_open_wait_ms(uint32_t value);
+  void set_danger_time_ms(uint32_t value);
 
   void set_led_enabled(uint32_t value);
   void set_led_count(uint32_t value);
@@ -259,6 +277,12 @@ public:
   uint8_t get_requested_to_position() const;
   uint32_t get_requested_duration_ms() const;
   void clear_request();
+
+  // Respuesta JSON de comandos cuya aceptacion decide el main.
+  void send_runtime_command_result(const char* command,
+                                   bool accepted,
+                                   const char* reason,
+                                   const char* deviceState);
 
   // ==========================================================
   // Info / reset
@@ -306,6 +330,8 @@ private:
 
   uint32_t log_level;
   uint32_t st_mode;
+  uint32_t open_wait_ms;
+  uint32_t danger_time_ms;
 
   uint32_t led_enabled;
   uint32_t led_count;
@@ -353,6 +379,8 @@ private:
   uint32_t sanitize_led_count(uint32_t value) const;
   uint32_t sanitize_led_brightness(uint32_t value) const;
   uint32_t sanitize_led_interval(uint32_t value, uint32_t defaultValue) const;
+  uint32_t sanitize_open_wait_ms(uint32_t value) const;
+  uint32_t sanitize_danger_time_ms(uint32_t value) const;
 };
 
 #endif // DOOR_CONFIG_H
