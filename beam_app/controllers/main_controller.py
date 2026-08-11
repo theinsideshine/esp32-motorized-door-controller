@@ -19,11 +19,12 @@ class MainController(QObject):
         self.serial_manager = SerialManager(); self.serial_queue = SerialEventQueue(); self.serial_manager.set_event_queue(self.serial_queue)
         self._factory_defaults = deepcopy(model); self._applied_config = deepcopy(model["configuration"])
         self._danger_flash = False; self._diagnostic_target = None; self._json_buffer = ""; self._awaiting_version = False
+        self._pending_parameter_writes = []
         self._cycle_timer = self._single_timer(self._finish_simulated_cycle)
         self._diagnostic_timer = self._single_timer(self._finish_simulated_diagnostic)
         self._poll_timer = QTimer(self); self._poll_timer.timeout.connect(self._process_serial_queue); self._poll_timer.start(30)
         self._blink_timer = QTimer(self); self._blink_timer.timeout.connect(self._blink_danger); self._blink_timer.start(450)
-        self._connect_signals(); self.view.populate_pid(model["pid"]); self.view.populate_configuration(model["configuration"])
+        self._connect_signals(); self.view.populate_pid(model["pid"]); self.view.populate_positions(model["positions"]); self.view.populate_configuration(model["configuration"])
         self.view.set_mode(False); self.view.set_connected(False); self.refresh()
 
     def _single_timer(self, callback):
@@ -39,6 +40,7 @@ class MainController(QObject):
         self.view.position_widget.positionSelected.connect(lambda key: self.go_position({"pos1_deg":"POS_1", "pos2_deg":"POS_2", "pos3_deg":"POS_3"}[key]))
         self.view.read_config_button.clicked.connect(self.read_configuration); self.view.apply_config_button.clicked.connect(self.apply_configuration)
         self.view.restore_config_button.clicked.connect(self.restore_configuration); self.view.factory_reset_button.clicked.connect(self.factory_reset)
+        self.view.apply_positions_button.clicked.connect(self.apply_positions)
         self.view.apply_pid_button.clicked.connect(self.apply_pid)
 
     @property
@@ -237,6 +239,11 @@ class MainController(QObject):
         if "app_version" in data:
             self.model["identity"]["app_version"]=str(data["app_version"]); self.view.version_label.setText(str(data["app_version"]))
         self._merge_firmware_values(data)
+        if self._pending_parameter_writes and self._is_parameter_write_response(data):
+            self._pending_parameter_writes.pop(0)
+            if not self._pending_parameter_writes:
+                self._send_json({"info":"all-params"})
+                self.view.config_feedback.setText("Cambios enviados · esperando confirmación de all-params.")
         if self._process_runtime_message(data):
             self.refresh(); return
         result=data.get("result")
@@ -275,7 +282,30 @@ class MainController(QObject):
             if self.model["state"]["device_state"] in ("READY","STOPPED"):
                 self.model["simulation"].update(presentation_state="IDLE",pending_command=None)
                 self.model["state"]["selected_command"]=None
-            self.view.populate_configuration(self.model["configuration"]); self.view.populate_pid(self.model["pid"])
+            self.view.populate_configuration(self.model["configuration"]); self.view.populate_pid(self.model["pid"]); self.view.populate_positions(self.model["positions"])
+            self.view.config_feedback.setText("Parámetros confirmados por el firmware.")
+
+    def _is_parameter_write_response(self, data):
+        if data.get("info") in ("all-params", "version") or "params" in data:
+            return False
+        return data.get("result") in ("ack", "ok", "error") or "reason" in data
+
+    def apply_positions(self):
+        try:
+            values = {key: float(field.text()) for key, field in self.view.position_inputs.items()}
+        except ValueError:
+            self.view.config_feedback.setText("Error de posiciones · ingresar valores numéricos."); return
+        if self.real_mode:
+            if not self.serial_manager.is_connected():
+                self.view.config_feedback.setText("Conectá el firmware antes de aplicar posiciones."); return
+            self._pending_parameter_writes = list(values)
+            for key, value in values.items(): self._send_json({key:value})
+            self.view.config_feedback.setText("Posiciones enviadas · esperando respuestas del firmware.")
+        else:
+            self.model["positions"].update(values)
+            self.view.populate_positions(self.model["positions"])
+            self.view.config_feedback.setText("Posiciones aplicadas y confirmadas por el modelo simulado.")
+            self.refresh()
 
     def read_configuration(self):
         if self.real_mode and self.serial_manager.is_connected():self._send_json({"info":"all-params"}); self.view.config_feedback.setText("Solicitud all-params enviada al firmware.")
@@ -293,7 +323,13 @@ class MainController(QObject):
             ints={"motion_mode","pwm_move","pid_pwm_max","pid_pwm_min_effective","control_period_us"};values={k:(int(f.text()) if k in ints else float(f.text())) for k,f in self.view.pid_inputs.items()}
             if values["control_period_us"]<=0 or values["pid_pwm_min_effective"]>values["pid_pwm_max"]:raise ValueError("rangos PID inconsistentes")
         except ValueError as exc:self.view.config_feedback.setText(f"Error PID · {exc}");return
-        self.model["pid"].update(values);self.model["telemetry"]["arrival_tol"]=values["auto_tolerance_deg"];self.view.config_feedback.setText("PID actualizado sólo localmente.");self.refresh()
+        if self.real_mode:
+            if not self.serial_manager.is_connected():self.view.config_feedback.setText("Conectá el firmware antes de aplicar pwm_move.");return
+            self._pending_parameter_writes=["pwm_move"]
+            self._send_json({"pwm_move":values["pwm_move"]})
+            self.view.config_feedback.setText("pwm_move enviado · esperando respuesta del firmware.")
+            return
+        self.model["pid"].update(values);self.model["telemetry"]["arrival_tol"]=values["auto_tolerance_deg"];self.view.populate_pid(self.model["pid"]);self.view.config_feedback.setText("PWM y PID confirmados por el modelo simulado.");self.refresh()
     def _read_config_fields(self):
         f=self.view.config_inputs;v={"open_wait_ms":int(f["open_wait_ms"].text()),"danger_time_ms":int(f["danger_time_ms"].text()),"led_enabled":f["led_enabled"].isChecked(),"led_blink_ms":int(f["led_blink_ms"].text()),"log_level":f["log_level"].text().strip().upper(),"st_mode":int(f["st_mode"].text())}
         if v["open_wait_ms"]<0 or v["danger_time_ms"]<=0 or v["led_blink_ms"]<=0:raise ValueError("tiempos inválidos")

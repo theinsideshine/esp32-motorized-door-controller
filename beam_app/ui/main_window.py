@@ -91,8 +91,11 @@ class MainWindow(QMainWindow):
         positions_panel = panel(); positions = QVBoxLayout(positions_panel); positions.setContentsMargins(18, 16, 18, 16)
         title = QLabel("POSICIONES Y MOVIMIENTO"); title.setObjectName("sectionTitle"); positions.addWidget(title)
         self.position_value_labels = {}
+        self.position_inputs = {}
         for key, text in (("pos1_deg", "POS_1 · abierta"), ("pos2_deg", "POS_2 · centro/reposo"), ("pos3_deg", "POS_3 · abierta")):
             label = QLabel(); label.setObjectName("positionReadout"); self.position_value_labels[key] = label; positions.addWidget(label)
+            field = QLineEdit(); field.setPlaceholderText(text); self.position_inputs[key] = field; positions.addWidget(field)
+        self.apply_positions_button = QPushButton("APLICAR POSICIONES"); self.apply_positions_button.setObjectName("secondaryButton"); positions.addWidget(self.apply_positions_button)
         self.pos_buttons = {}
         for pos in ("POS_1", "POS_2", "POS_3"):
             button = QPushButton(f"Ir a {pos}"); button.setObjectName("diagButton"); self.pos_buttons[pos] = button; positions.addWidget(button)
@@ -104,12 +107,12 @@ class MainWindow(QMainWindow):
             card = ValueCard(key); self.metric_cards[key] = card; metrics.addWidget(card, index//3, index%3)
         layout.addLayout(metrics)
         pid_panel = panel(); pid_layout = QVBoxLayout(pid_panel); pid_layout.setContentsMargins(18, 16, 18, 16)
-        pid_title = QLabel("PID Y PARÁMETROS DE MOVIMIENTO · MODELO SIMULADO"); pid_title.setObjectName("sectionTitle"); pid_layout.addWidget(pid_title)
+        pid_title = QLabel("PWM Y PARÁMETROS PID"); pid_title.setObjectName("sectionTitle"); pid_layout.addWidget(pid_title)
         pid_grid = QGridLayout(); self.pid_inputs = {}
         for index, key in enumerate(self.model["pid"]):
             field = QLineEdit(); self.pid_inputs[key] = field
             label = QLabel(key); label.setObjectName("fieldLabel"); pid_grid.addWidget(label, (index//4)*2, index%4); pid_grid.addWidget(field, (index//4)*2+1, index%4)
-        pid_layout.addLayout(pid_grid); self.apply_pid_button = QPushButton("Aplicar PID al modelo simulado"); self.apply_pid_button.setObjectName("secondaryButton"); pid_layout.addWidget(self.apply_pid_button, alignment=Qt.AlignRight)
+        pid_layout.addLayout(pid_grid); self.apply_pid_button = QPushButton("APLICAR PWM / PID"); self.apply_pid_button.setObjectName("secondaryButton"); pid_layout.addWidget(self.apply_pid_button, alignment=Qt.AlignRight)
         layout.addWidget(pid_panel)
         return page
 
@@ -169,6 +172,9 @@ class MainWindow(QMainWindow):
 
     def populate_pid(self, pid):
         for key, value in pid.items(): self.pid_inputs[key].setText(str(value))
+
+    def populate_positions(self, positions):
+        for key, value in positions.items(): self.position_inputs[key].setText(str(value))
 
     def populate_configuration(self, config):
         for key, widget in self.config_inputs.items():
