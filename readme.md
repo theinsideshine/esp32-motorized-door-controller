@@ -701,7 +701,10 @@ esp32-motorized-door-controller/
 │   ├── etapa3/
 │   ├── etapa4/
 │   ├── etapa5/
-│   └── etapa6/
+│   ├── etapa6/
+│   ├── fsm/
+│   ├── conclusiones.pptx
+│   └── puerta_motorizada_estrategia_desarrollo_v01.pdf
 ├── images/
 │   ├── uno.png
 │   ├── dos.png
@@ -714,9 +717,38 @@ esp32-motorized-door-controller/
 
 ---
 
-## 13. Documentación del proyecto
+## 13. Documentación del proyecto y serie de videos
 
-La documentación fue separada en etapas para conservar el razonamiento y la evidencia de cada decisión.
+La documentación fue separada en capítulos para conservar el razonamiento, las pruebas y la evidencia de cada decisión.
+
+La idea es acompañar cada bloque documental con un video. Los enlaces que aparecen a continuación son **marcadores temporales**: cuando los videos estén publicados, solo será necesario reemplazar cada URL por el vínculo definitivo.
+
+> La serie completa recorre el proyecto desde la presentación inicial hasta las conclusiones. No busca condensar todo en un único video: cada etapa conserva su propio contexto, ensayos, errores y decisiones.
+
+| Capítulo | Documentación | Video |
+|---|---|---|
+| Presentación general | [Estrategia de desarrollo](doc/puerta_motorizada_estrategia_desarrollo_v01.pdf) | [Video — Presentación](https://youtu.be/PENDIENTE_PRESENTACION) |
+| Conceptos de control | [Material de conceptos](doc/conceptos%20de%20control/) | [Video — Conceptos de control](https://youtu.be/PENDIENTE_CONCEPTOS_CONTROL) |
+| Etapa 1 | [Documentación Etapa 1](doc/etapa1/) | [Video — Etapa 1](https://youtu.be/PENDIENTE_ETAPA_1) |
+| Etapa 2 | [Documentación Etapa 2](doc/etapa2/) | [Video — Etapa 2](https://youtu.be/PENDIENTE_ETAPA_2) |
+| Etapa 3 | [Documentación Etapa 3](doc/etapa3/) | [Video — Etapa 3](https://youtu.be/PENDIENTE_ETAPA_3) |
+| Etapa 4 | [Documentación Etapa 4](doc/etapa4/) | [Video — Etapa 4](https://youtu.be/PENDIENTE_ETAPA_4) |
+| Etapa 5 | [Documentación Etapa 5](doc/etapa5/) | [Video — Etapa 5](https://youtu.be/PENDIENTE_ETAPA_5) |
+| Etapa 6 | [Documentación Etapa 6](doc/etapa6/) | [Video — Etapa 6](https://youtu.be/PENDIENTE_ETAPA_6) |
+| FSM cooperativas | [Documentación FSM](doc/fsm/) | [Video — FSM](https://youtu.be/PENDIENTE_FSM) |
+| Conclusiones | [Presentación de conclusiones](doc/conclusiones.pptx) | [Video — Conclusiones](https://youtu.be/PENDIENTE_CONCLUSIONES) |
+
+### Presentación general
+
+**Marco, objetivo y estrategia de desarrollo**
+
+Introduce el problema, el alcance del prototipo y la forma en que se planteó el trabajo como proyecto integrador de Ingeniería Electrónica e I+D.
+
+El documento de referencia es:
+
+```text
+doc/puerta_motorizada_estrategia_desarrollo_v01.pdf
+```
 
 ### Conceptos de control
 
@@ -768,6 +800,48 @@ Investigación de una anomalía, aislamiento de variables y revisión de la acci
 **Aplicación desktop**
 
 Interfaz de operación, diagnóstico, configuración y modo simulado.
+
+### FSM cooperativas
+
+**Dispositivo, posicionamiento y señalización visual**
+
+Este capítulo concentra la evolución final de la arquitectura hacia varias máquinas de estado cooperativas:
+
+- FSM superior del dispositivo;
+- FSM de posicionamiento `CDoorMotion`;
+- FSM visual `CLedStrip`;
+- coordinación mediante superloop;
+- convivencia con comunicación, sensor, PID y eventos de seguridad.
+
+La documentación específica se encuentra en:
+
+```text
+doc/fsm/
+```
+
+### Conclusiones
+
+**Cierre del prototipo y próximas etapas**
+
+El cierre resume lo aprendido durante todo el recorrido y deja explícito que el prototipo actual no representa el final de un desarrollo profesional.
+
+Entre las etapas futuras quedan:
+
+- decidir el tratamiento definitivo de la acción derivativa;
+- corregir comportamientos pendientes de desconexión de la app;
+- construir un prototipo a escala real;
+- verificar nuevamente la planta y el controlador sobre esa mecánica;
+- evaluar el BOM del prototipo real;
+- estudiar embrague y mecanismos de liberación;
+- estudiar solenoides o trabas para bloqueo mecánico cuando el producto lo requiera;
+- diseñar y validar el nuevo hardware de control;
+- avanzar desde un prototipo funcional hacia criterios reales de fabricación y producción.
+
+La presentación de cierre se encuentra en:
+
+```text
+doc/conclusiones.pptx
+```
 
 ---
 
