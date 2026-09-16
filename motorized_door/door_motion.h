@@ -145,6 +145,7 @@ private:
   void register_sample_timing(uint32_t dtUs);
 
   float read_sensor(bool countForMotionStats);
+  float mechanical_error_deg(float currentDeg, float targetDeg) const;
 
   uint8_t compute_motion_pwm(float absErrorDeg) const;
   uint8_t compute_pid_pwm(float errorDeg, float velocityDegS, float dtSec, DoorMotionDirection& desiredDirection);

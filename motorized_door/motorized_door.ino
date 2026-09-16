@@ -20,7 +20,7 @@
 /*
   ============================================================
   PROYECTO: ESP32 MOTORIZED DOOR CONTROLLER
-  VERSION: v5.2c-runtime-events
+  VERSION: v5.2d-mechanical-path
   ============================================================
 
   ALCANCE ACTUAL
@@ -81,7 +81,7 @@
 // VERSION
 // ============================================================
 
-#define APP_VERSION "v5.2c-runtime-events"
+#define APP_VERSION "v5.2d-mechanical-path"
 
 // ============================================================
 // PINES

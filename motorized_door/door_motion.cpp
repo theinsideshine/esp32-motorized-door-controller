@@ -136,7 +136,7 @@ void CDoorMotion::cancel(const char* reason)
 
   if (state == DOOR_MOTION_START || state == DOOR_MOTION_MOVING) {
     float currentDeg = read_sensor(false);
-    float errorDeg = angle_error_deg(currentDeg, targetDeg);
+    float errorDeg = mechanical_error_deg(currentDeg, targetDeg);
     cancel_now(reason, currentDeg, errorDeg);
     return;
   }
@@ -277,6 +277,24 @@ float CDoorMotion::angle_distance_deg(float aDeg, float bDeg)
   return fabs(angle_error_deg(aDeg, bDeg));
 }
 
+float CDoorMotion::mechanical_error_deg(float currentDeg, float targetDeg) const
+{
+  if (cfg == nullptr) {
+    return angle_error_deg(currentDeg, targetDeg);
+  }
+
+  // POS_2 define el centro/topologia mecanica de la puerta.
+  // Cada angulo se expresa primero respecto de POS_2 usando wrap solo
+  // para interpretar correctamente el sensor absoluto 0..360.
+  // La resta final NO se normaliza a +/-180: puede superar 180 grados
+  // cuando el recorrido correcto debe pasar por POS_2.
+  float centerDeg = cfg->get_pos2_deg();
+  float currentFromCenterDeg = angle_error_deg(currentDeg, centerDeg);
+  float targetFromCenterDeg = angle_error_deg(targetDeg, centerDeg);
+
+  return currentFromCenterDeg - targetFromCenterDeg;
+}
+
 void CDoorMotion::reset_stats()
 {
   controlTimer.start();
@@ -355,7 +373,7 @@ uint8_t CDoorMotion::compute_pid_pwm(float errorDeg, float velocityDegS, float d
     return 0;
   }
 
-  // angle_error_deg() usa error = current - target.
+  // DoorMotion usa error mecanico = current - target sobre el eje centrado en POS_2.
   // Para el PID usamos error de control = target - current, por eso se invierte el signo.
   float controlErrorDeg = -errorDeg;
   float absErrorDeg = fabs(errorDeg);
@@ -653,7 +671,7 @@ void CDoorMotion::complete_settling_if_ready()
   }
 
   float finalDeg = read_sensor(false);
-  float finalError = angle_error_deg(finalDeg, targetDeg);
+  float finalError = mechanical_error_deg(finalDeg, targetDeg);
 
   if (finishWasCancel && cfg->get_log_level() != DOOR_LOG_LEVEL_PLOTTER) {
     Serial.print("AUTO CANCELADO: ");
@@ -678,7 +696,7 @@ void CDoorMotion::start_step()
   targetName = pendingTargetName;
 
   startDeg = currentDeg;
-  startErrorDeg = angle_error_deg(startDeg, targetDeg);
+  startErrorDeg = mechanical_error_deg(startDeg, targetDeg);
 
   decisionDeg = startDeg;
   decisionErrorDeg = startErrorDeg;
@@ -803,7 +821,7 @@ void CDoorMotion::moving_step()
   }
 
   float currentDeg = read_sensor(true);
-  float errorDeg = angle_error_deg(currentDeg, targetDeg);
+  float errorDeg = mechanical_error_deg(currentDeg, targetDeg);
   float absErrorDeg = fabs(errorDeg);
 
   decisionDeg = currentDeg;
