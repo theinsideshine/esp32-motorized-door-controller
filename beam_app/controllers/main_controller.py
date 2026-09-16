@@ -314,7 +314,13 @@ class MainController(QObject):
     def apply_configuration(self):
         try:values=self._read_config_fields()
         except ValueError as exc:self.view.config_feedback.setText(f"Error de validación · {exc}");return
-        self.model["configuration"].update(values);self._applied_config=deepcopy(values);self.view.config_feedback.setText("Aplicado al modelo local; envío de configuración real aún no habilitado.");self.refresh()
+        if self.real_mode:
+            if not self.serial_manager.is_connected():self.view.config_feedback.setText("Conectá el firmware antes de aplicar la configuración.");return
+            self._pending_parameter_writes=list(values)
+            for key,value in values.items():self._send_json({key:value})
+            self.view.config_feedback.setText("Configuración enviada · esperando respuestas del firmware.")
+            return
+        self.model["configuration"].update(values);self._applied_config=deepcopy(values);self.view.config_feedback.setText("Configuración aplicada al modelo local.");self.refresh()
     def restore_configuration(self):self.model["configuration"]=deepcopy(self._applied_config);self.view.populate_configuration(self.model["configuration"]);self.refresh()
     def factory_reset(self):
         self.model["configuration"]=deepcopy(self._factory_defaults["configuration"]);self.model["pid"]=deepcopy(self._factory_defaults["pid"]);self.view.populate_configuration(self.model["configuration"]);self.view.populate_pid(self.model["pid"]);self.view.config_feedback.setText("Factory reset local simulado.");self.refresh()
@@ -325,15 +331,18 @@ class MainController(QObject):
         except ValueError as exc:self.view.config_feedback.setText(f"Error PID · {exc}");return
         if self.real_mode:
             if not self.serial_manager.is_connected():self.view.config_feedback.setText("Conectá el firmware antes de aplicar pwm_move.");return
-            self._pending_parameter_writes=["pwm_move"]
-            self._send_json({"pwm_move":values["pwm_move"]})
-            self.view.config_feedback.setText("pwm_move enviado · esperando respuesta del firmware.")
+            self._pending_parameter_writes=list(values)
+            for key,value in values.items():self._send_json({key:value})
+            self.view.config_feedback.setText("PWM y PID enviados · esperando respuestas del firmware.")
             return
         self.model["pid"].update(values);self.model["telemetry"]["arrival_tol"]=values["auto_tolerance_deg"];self.view.populate_pid(self.model["pid"]);self.view.config_feedback.setText("PWM y PID confirmados por el modelo simulado.");self.refresh()
     def _read_config_fields(self):
-        f=self.view.config_inputs;v={"open_wait_ms":int(f["open_wait_ms"].text()),"danger_time_ms":int(f["danger_time_ms"].text()),"led_enabled":f["led_enabled"].isChecked(),"led_blink_ms":int(f["led_blink_ms"].text()),"log_level":f["log_level"].text().strip().upper(),"st_mode":int(f["st_mode"].text())}
+        f=self.view.config_inputs;log_text=f["log_level"].text().strip().upper();log_levels={"DISABLED":0,"ERROR":1,"WARN":1,"MSG":1,"INFO":1,"JSON":2,"DEBUG":2,"PLOTTER":3,"TRACE":3}
+        log_level=log_levels.get(log_text)
+        if log_level is None:log_level=int(log_text)
+        v={"open_wait_ms":int(f["open_wait_ms"].text()),"danger_time_ms":int(f["danger_time_ms"].text()),"led_enabled":int(f["led_enabled"].isChecked()),"led_blink_ms":int(f["led_blink_ms"].text()),"log_level":log_level,"st_mode":int(f["st_mode"].text())}
         if v["open_wait_ms"]<0 or v["danger_time_ms"]<=0 or v["led_blink_ms"]<=0:raise ValueError("tiempos inválidos")
-        if v["log_level"] not in {"ERROR","WARN","INFO","DEBUG","TRACE"}:raise ValueError("log_level inválido")
+        if v["log_level"] not in {0,1,2,3}:raise ValueError("log_level inválido")
         return v
     def refresh(self):self.view.render(self.model,self.model["simulation"]["connected"],self._danger_flash)
     def _ready_centered(self):

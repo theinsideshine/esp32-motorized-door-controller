@@ -118,7 +118,7 @@ class MainWindow(QMainWindow):
 
     def _build_configuration(self):
         page = QWidget(); layout = QVBoxLayout(page); layout.setContentsMargins(4, 16, 4, 16); layout.setSpacing(14)
-        notice = QLabel("CONFIGURACIÓN LOCAL · Leer, Aplicar y Restaurar operan sólo sobre el modelo JSON cargado en memoria."); notice.setObjectName("notice"); notice.setWordWrap(True); layout.addWidget(notice)
+        notice = QLabel("CONFIGURACIÓN GENERAL · En modo REAL, Leer y Aplicar operan sobre el firmware conectado. Restaurar y Factory reset son locales."); notice.setObjectName("notice"); notice.setWordWrap(True); layout.addWidget(notice)
         config_panel = panel(); form = QFormLayout(config_panel); form.setContentsMargins(24, 22, 24, 22); form.setHorizontalSpacing(28); form.setVerticalSpacing(13)
         self.config_inputs = {}
         for key in ("open_wait_ms", "danger_time_ms", "led_blink_ms", "log_level", "st_mode"):
