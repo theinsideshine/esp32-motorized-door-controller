@@ -719,7 +719,7 @@ esp32-motorized-door-controller/
 
 La documentación fue separada en capítulos para conservar el razonamiento, las pruebas y la evidencia de cada decisión.
 
-La idea es acompañar cada bloque documental con un video. Los enlaces que aparecen a continuación son **marcadores temporales**: cuando los videos estén publicados, solo será necesario reemplazar cada URL por el vínculo definitivo.
+La idea es acompañar cada bloque documental con uno o más videos. Los capítulos todavía no publicados mantienen enlaces temporales que serán reemplazados a medida que avance la serie.
 
 > La serie completa recorre el proyecto desde la presentación inicial hasta las conclusiones. No busca condensar todo en un único video: cada etapa conserva su propio contexto, ensayos, errores y decisiones.
 
@@ -729,16 +729,15 @@ La idea es acompañar cada bloque documental con un video. Los enlaces que apare
 | Capítulo | Documentación | Video |
 |---|---|---|
 | Presentación general | [Estrategia de desarrollo](doc/puerta_motorizada_estrategia_desarrollo_v01.pdf) | [Video — Presentación](https://youtu.be/tGlV2I14xzM?si=gqTcPS8floOHWkKc) |
-| Conceptos de control | [Material de conceptos](doc/conceptos%20de%20control/) | [Video — Conceptos de control](https://youtu.be/PENDIENTE_CONCEPTOS_CONTROL) |
+| Conceptos de control 1 | [Material de conceptos](doc/conceptos%20de%20control/) | [Video — Conceptos de Control 1](https://youtu.be/-zWi4smrSy0?si=rCGWmWPPGxEtW44c) |
+| Conceptos de control 2 | [Material de conceptos](doc/conceptos%20de%20control/) | [Video — Conceptos de Control 2](https://youtu.be/oZFYpoFS2YE?si=7HI8qRgSr294EGh5) |
 | Etapa 1 | [Documentación Etapa 1](doc/etapa1/) | [Video — Etapa 1](https://youtu.be/AiCed6doYCs?si=erTG39RUByldZ4Nc) |
 | Etapa 2 | [Documentación Etapa 2](doc/etapa2/) | [Video — Etapa 2](https://youtu.be/_OtV3IECt6k?si=y8wfF_4OTmgoHx5V) |
-| Etapa 3 | [Documentación Etapa 3](doc/etapa3/) | [Video — Etapa 3](https://youtu.be/PENDIENTE_ETAPA_3) |
-| Etapa 4 | [Documentación Etapa 4](doc/etapa4/) | [Video — Etapa 4](https://youtu.be/PENDIENTE_ETAPA_4) |
+| Etapas 3 y 4 | [Documentación Etapa 3](doc/etapa3/) · [Documentación Etapa 4](doc/etapa4/) | [Video — Etapas 3 y 4](https://youtu.be/SIyOGEayfiI?si=ntqV_h6SsCf4ipXb) |
 | Etapa 5 | [Documentación Etapa 5](doc/etapa5/) | [Video — Etapa 5](https://youtu.be/PENDIENTE_ETAPA_5) |
 | Etapa 6 | [Documentación Etapa 6](doc/etapa6/) | [Video — Etapa 6](https://youtu.be/PENDIENTE_ETAPA_6) |
 | FSM cooperativas | [Documentación FSM](doc/fsm/) | [Video — FSM](https://youtu.be/PENDIENTE_FSM) |
 | Conclusiones | [Presentación de conclusiones](doc/conclusiones.pptx) | [Video — Conclusiones](https://youtu.be/PENDIENTE_CONCLUSIONES)<br>[Demo final del proyecto](https://youtu.be/0kEP7_TdRBw) |
-
 ### Presentación general
 
 **Marco, objetivo y estrategia de desarrollo**
