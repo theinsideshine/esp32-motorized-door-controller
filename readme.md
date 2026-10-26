@@ -734,9 +734,9 @@ La idea es acompañar cada bloque documental con uno o más videos. Los capítul
 | Etapa 1 | [Documentación Etapa 1](doc/etapa1/) | [Video — Etapa 1](https://youtu.be/AiCed6doYCs?si=erTG39RUByldZ4Nc) |
 | Etapa 2 | [Documentación Etapa 2](doc/etapa2/) | [Video — Etapa 2](https://youtu.be/_OtV3IECt6k?si=y8wfF_4OTmgoHx5V) |
 | Etapas 3 y 4 | [Documentación Etapa 3](doc/etapa3/) · [Documentación Etapa 4](doc/etapa4/) | [Video — Etapas 3 y 4](https://youtu.be/SIyOGEayfiI?si=ntqV_h6SsCf4ipXb) |
-| Etapa 5 | [Documentación Etapa 5](doc/etapa5/) | [Video — Etapa 5](https://youtu.be/PENDIENTE_ETAPA_5) |
-| Etapa 6 | [Documentación Etapa 6](doc/etapa6/) | [Video — Etapa 6](https://youtu.be/PENDIENTE_ETAPA_6) |
-| FSM cooperativas | [Documentación FSM](doc/fsm/) | [Video — FSM](https://youtu.be/PENDIENTE_FSM) |
+| Etapa 5 | [Documentación Etapa 5](doc/etapa5/) | [Video — Etapa 5](https://youtu.be/KQPx-mboHNc) |
+| Etapa 6 | [Documentación Etapa 6](doc/etapa6/) | [Video — Etapa 6](https://youtu.be/NUs6gEqrClc) |
+| FSM cooperativas | [Documentación FSM](doc/fsm/) | [Video — FSM](https://youtu.be/XnVssP6cG1E) |
 | Conclusiones | [Presentación de conclusiones](doc/conclusiones.pptx) | [Video — Conclusiones](https://youtu.be/PENDIENTE_CONCLUSIONES)<br>[Demo final del proyecto](https://youtu.be/0kEP7_TdRBw) |
 ### Presentación general
 
